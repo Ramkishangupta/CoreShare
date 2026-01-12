@@ -1,0 +1,23 @@
+{
+  "orchestratorUrl": "http://localhost:3000",
+  "workerId": "worker-01",
+  "workerToken": "worker-secret-token-change-this",
+  "resources": {
+    "type": "GPU",
+    "gpuModel": "NVIDIA RTX 3090",
+    "gpuCount": 2,
+    "cpuCores": 16,
+    "ram": 64,
+    "storage": 500
+  },
+  "docker": {
+    "socketPath": "/var/run/docker.sock",
+    "maxConcurrentJobs": 1,
+    "defaultTimeout": 3600000,
+    "networkMode": "none",
+    "memoryLimit": "16g",
+    "cpuLimit": 8
+  },
+  "heartbeatInterval": 30000,
+  "logLevel": "info"
+}

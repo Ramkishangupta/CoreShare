@@ -1,0 +1,172 @@
+const express = require('express');
+const { body, validationResult } = require('express-validator');
+const authenticateToken = require('../middleware/auth');
+const db = require('../db');
+
+const router = express.Router();
+
+// Submit new job
+router.post('/',
+  authenticateToken,
+  [
+    body('dockerfile').notEmpty(),
+    body('resources.gpu').optional().isInt({ min: 0 }),
+    body('resources.cpu').optional().isInt({ min: 1 }),
+    body('resources.ram').optional().isInt({ min: 1 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { dockerfile, resources } = req.body;
+    const userId = req.user.userId;
+
+    try {
+      // Check user credits
+      const userResult = await db.query(
+        'SELECT credits FROM users WHERE id = $1',
+        [userId]
+      );
+
+      if (userResult.rows.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const userCredits = parseFloat(userResult.rows[0].credits);
+      if (userCredits <= 0) {
+        return res.status(400).json({ error: 'Insufficient credits' });
+      }
+
+      // Add job via JobScheduler
+      const jobScheduler = req.app.locals.jobScheduler;
+      const job = await jobScheduler.addJob({
+        userId,
+        dockerfile,
+        resources: {
+          gpu: resources.gpu || 0,
+          cpu: resources.cpu || 1,
+          ram: resources.ram || 2
+        },
+        priority: 0
+      });
+
+      res.status(201).json({
+        job: {
+          id: job.id,
+          status: job.status,
+          createdAt: job.created_at
+        }
+      });
+    } catch (error) {
+      console.error('Job submission error:', error);
+      res.status(500).json({ error: 'Failed to submit job' });
+    }
+  }
+);
+
+// Get user's jobs
+router.get('/', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const { status, limit = 50, offset = 0 } = req.query;
+
+  try {
+    let query = 'SELECT * FROM jobs WHERE user_id = $1';
+    const params = [userId];
+
+    if (status) {
+      query += ' AND status = $2';
+      params.push(status);
+    }
+
+    query += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await db.query(query, params);
+
+    res.json({
+      jobs: result.rows.map(job => ({
+        id: job.id,
+        status: job.status,
+        resources: job.resources_requested,
+        createdAt: job.created_at,
+        startTime: job.start_time,
+        endTime: job.end_time
+      }))
+    });
+  } catch (error) {
+    console.error('Fetch jobs error:', error);
+    res.status(500).json({ error: 'Failed to fetch jobs' });
+  }
+});
+
+// Get specific job details
+router.get('/:id', authenticateToken, async (req, res) => {
+  const jobId = req.params.id;
+  const userId = req.user.userId;
+
+  try {
+    const result = await db.query(
+      'SELECT * FROM jobs WHERE id = $1 AND user_id = $2',
+      [jobId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    const job = result.rows[0];
+
+    res.json({
+      job: {
+        id: job.id,
+        status: job.status,
+        dockerfile: job.dockerfile,
+        resources: job.resources_requested,
+        logs: job.logs,
+        result: job.result,
+        error: job.error_message,
+        createdAt: job.created_at,
+        startTime: job.start_time,
+        endTime: job.end_time
+      }
+    });
+  } catch (error) {
+    console.error('Fetch job error:', error);
+    res.status(500).json({ error: 'Failed to fetch job' });
+  }
+});
+
+// Cancel job
+router.post('/:id/cancel', authenticateToken, async (req, res) => {
+  const jobId = req.params.id;
+  const userId = req.user.userId;
+
+  try {
+    const result = await db.query(
+      'SELECT status FROM jobs WHERE id = $1 AND user_id = $2',
+      [jobId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    const job = result.rows[0];
+
+    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+      return res.status(400).json({ error: 'Job already finished' });
+    }
+
+    const jobScheduler = req.app.locals.jobScheduler;
+    await jobScheduler.cancelJob(jobId);
+
+    res.json({ message: 'Job cancelled successfully' });
+  } catch (error) {
+    console.error('Cancel job error:', error);
+    res.status(500).json({ error: 'Failed to cancel job' });
+  }
+});
+
+module.exports = router;
