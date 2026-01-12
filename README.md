@@ -406,5 +406,3 @@ College PBL Project Team - 2026
 **Ready to start computing?** 🚀
 
 See [SETUP.md](SETUP.md) for detailed installation instructions!
-#   P B L  
- 
