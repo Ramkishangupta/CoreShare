@@ -1,0 +1,25 @@
+{
+  "name": "gpu-cpu-rental-platform",
+  "version": "1.0.0",
+  "description": "Distributed GPU/CPU rental platform for college infrastructure",
+  "private": true,
+  "workspaces": [
+    "orchestrator",
+    "worker",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:orchestrator\" \"npm run dev:frontend\"",
+    "dev:orchestrator": "npm run dev --workspace=orchestrator",
+    "dev:worker": "npm run dev --workspace=worker",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "build": "npm run build --workspaces",
+    "start": "npm run start --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

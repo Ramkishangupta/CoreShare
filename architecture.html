@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPU/CPU Rental Platform - Architecture</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #f8fafc 0%, #e0e7ff 50%, #f1f5f9 100%);
+            background-attachment: fixed;
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: #1e293b;
+            margin-bottom: 50px;
+            padding: 50px 40px;
+            background: white;
+            border-radius: 24px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08), 
+                        0 0 0 1px rgba(148, 163, 184, 0.1) inset;
+        }
+
+        h1 {
+            font-size: 3.5em;
+            margin-bottom: 15px;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 50%, #6366f1 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            font-size: 1.3em;
+            color: #64748b;
+            font-weight: 500;
+            letter-spacing: 0.02em;
+        }
+
+        .diagram-section {
+            background: white;
+            border-radius: 24px;
+            padding: 50px;
+            margin-bottom: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25),
+                        0 0 0 1px rgba(0, 0, 0, 0.05);
+            animation: slideUp 0.6s ease-out;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .diagram-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6, #6366f1);
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .section-title {
+            font-size: 2.2em;
+            font-weight: 700;
+            color: #1e293b;
+            margin-bottom: 25px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #e0e7ff;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            letter-spacing: -0.02em;
+        }
+
+        .icon {
+            font-size: 1.3em;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+        }
+
+        .description {
+            color: #475569;
+            line-height: 1.9;
+            margin-bottom: 35px;
+            font-size: 1.15em;
+            font-weight: 400;
+        }
+
+        .mermaid {
+            background: #fafafa;
+            padding: 40px;
+            border-radius: 16px;
+            margin: 30px 0;
+            border: 1px solid #e5e7eb;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+
+        .legend {
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+            padding: 30px;
+            border-radius: 16px;
+            margin-top: 30px;
+            border: 1px solid #bae6fd;
+            box-shadow: 0 4px 12px rgba(14, 165, 233, 0.1);
+        }
+
+        .legend h3 {
+            color: #0c4a6e;
+            margin-bottom: 20px;
+            font-size: 1.4em;
+            font-weight: 700;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 12px 0;
+            padding: 12px 16px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .legend-item:hover {
+            transform: translateX(5px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .legend-color {
+            width: 35px;
+            height: 35px;
+            border-radius: 8px;
+            margin-right: 18px;
+            border: 2px solid rgba(0, 0, 0, 0.1);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+        }
+
+        .component-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 25px;
+            margin-top: 30px;
+        }
+
+        .component-card {
+            background: white;
+            color: #1e293b;
+            padding: 28px;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border: 1px solid #e2e8f0;
+        }
+
+        .component-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 12px 30px rgba(59, 130, 246, 0.15);
+            border-color: #3b82f6;
+        }
+
+        .component-card h4 {
+            font-size: 1.4em;
+            margin-bottom: 12px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .component-card p {
+            color: #475569;
+            line-height: 1.7;
+            font-size: 1em;
+            margin-top: 60px;
+            padding: 30px;
+            background: white;
+            border-radius: 16px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        footer p {
+            margin: 8px 0;
+            font-size: 1.05em;
+            font-weight: 500;
+        }
+
+        .tech-stack {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            color: #3b82f6;
+            padding: 10px 18px;
+            border-radius: 25px;
+            font-size: 0.95em;
+            font-weight: 600;
+            border: 1.5px solid #bfdbfe;
+            transition: all 0.2s ease;
+        }
+
+        .tech-badge:hover {
+            background: #dbeafe;
+            border-color: #3b82f6;
+            transition: all 0.2s ease;
+        }
+
+        .tech-badge:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(1.05);
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 20px 10px;
+            }
+
+            h1 {
+                font-size: 2.2em;
+            }
+            
+            .diagram-section {
+                padding: 30px 20px;
+            }
+
+            .component-list {
+                grid-template-columns: 1fr;
+            }
+
+            .section-title {
+                font-size: 1.8em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 GPU/CPU Rental Platform</h1>
+            <p class="subtitle">Distributed Computing Infrastructure for College Labs</p>
+        </header>
+
+        <!-- System Architecture Diagram -->
+        <div class="diagram-section">
+            <h2 class="section-title">
+                <span class="icon">🏗️</span>
+                System Architecture
+            </h2>
+            <p class="description">
+                Complete overview of the distributed GPU/CPU rental platform showing all major components, 
+                their interactions, and communication protocols. The system follows a client-server architecture 
+                with WebSocket-based real-time communication between workers and the orchestrator.
+            </p>
+
+            <div class="mermaid">
+graph TB
+    subgraph "Client Layer"
+        A[Web Browser] --> B[Next.js Frontend<br/>Port 3001]
+        B --> C[React Components]
+        C --> D[Socket.io Client]
+    end
+
+    subgraph "API Gateway Layer"
+        E[Orchestrator Server<br/>Node.js + Express<br/>Port 3000]
+        F[Socket.io Server]
+        G[REST API Endpoints]
+    end
+
+    subgraph "Business Logic Layer"
+        H[Worker Manager]
+        I[Job Scheduler]
+        J[Authentication<br/>JWT]
+    end
+
+    subgraph "Data Layer"
+        K[(PostgreSQL<br/>Database)]
+        L[(Redis<br/>Cache & Queue)]
+        M[Bull Queue]
+    end
+
+    subgraph "Worker Nodes"
+        N1[Worker Agent 1<br/>GPU Node]
+        N2[Worker Agent 2<br/>GPU Node]
+        N3[Worker Agent 3<br/>CPU Node]
+    end
+
+    subgraph "Execution Layer"
+        O1[Docker Engine 1<br/>NVIDIA Runtime]
+        O2[Docker Engine 2<br/>NVIDIA Runtime]
+        O3[Docker Engine 3<br/>CPU Only]
+    end
+
+    subgraph "Hardware Layer"
+        P1[2x RTX 3090<br/>16 CPU Cores<br/>64GB RAM]
+        P2[1x RTX 3080<br/>12 CPU Cores<br/>32GB RAM]
+        P3[32 CPU Cores<br/>128GB RAM]
+    end
+
+    %% Connections
+    B <-->|HTTPS/WSS| E
+    B -->|REST API| G
+    D <-->|WebSocket| F
+    
+    E --> H
+    E --> I
+    E --> J
+    
+    H <-->|Worker Registration<br/>Heartbeat| F
+    I -->|Job Assignment| F
+    
+    H --> K
+    I --> K
+    J --> K
+    
+    I <-->|Queue Management| M
+    M --> L
+    
+    F <-->|WebSocket<br/>Job Commands| N1
+    F <-->|WebSocket<br/>Job Commands| N2
+    F <-->|WebSocket<br/>Job Commands| N3
+    
+    N1 -->|Execute Jobs| O1
+    N2 -->|Execute Jobs| O2
+    N3 -->|Execute Jobs| O3
+    
+    O1 -.->|Uses| P1
+    O2 -.->|Uses| P2
+    O3 -.->|Uses| P3
+
+    %% Styling
+    classDef frontend fill:#61dafb,stroke:#333,stroke-width:2px,color:#000
+    classDef backend fill:#68a063,stroke:#333,stroke-width:2px,color:#fff
+    classDef database fill:#336791,stroke:#333,stroke-width:2px,color:#fff
+    classDef worker fill:#ff6b6b,stroke:#333,stroke-width:2px,color:#fff
+    classDef hardware fill:#ffd93d,stroke:#333,stroke-width:2px,color:#000
+    
+    class A,B,C,D frontend
+    class E,F,G,H,I,J backend
+    class K,L,M database
+    class N1,N2,N3,O1,O2,O3 worker
+    class P1,P2,P3 hardware
+            </div>
+
+            <div class="legend">
+                <h3>Component Legend</h3>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #61dafb;"></div>
+                    <span><strong>Frontend Layer:</strong> User-facing Next.js application with React components</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #68a063;"></div>
+                    <span><strong>Backend Layer:</strong> Orchestrator server managing jobs and workers</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #336791;"></div>
+                    <span><strong>Data Layer:</strong> PostgreSQL for persistence, Redis for queue and cache</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #ff6b6b;"></div>
+                    <span><strong>Worker Layer:</strong> Distributed worker nodes executing Docker containers</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #ffd93d;"></div>
+                    <span><strong>Hardware Layer:</strong> Physical GPU/CPU resources in college labs</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Job Flow Diagram -->
+        <div class="diagram-section">
+            <h2 class="section-title">
+                <span class="icon">🔄</span>
+                Job Execution Flow
+            </h2>
+            <p class="description">
+                Step-by-step flow showing how a user's job moves through the system from submission to completion. 
+                This diagram illustrates the complete lifecycle of a Docker job including queuing, resource allocation, 
+                execution, monitoring, and billing.
+            </p>
+
+            <div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as User<br/>(Browser)
+    participant F as Frontend<br/>(Next.js)
+    participant A as API Server<br/>(Orchestrator)
+    participant Q as Job Queue<br/>(Bull/Redis)
+    participant WM as Worker Manager
+    participant W as Worker Agent<br/>(GPU/CPU Node)
+    participant D as Docker Engine
+    participant DB as Database<br/>(PostgreSQL)
+
+    U->>F: 1. Upload Dockerfile<br/>Select Resources<br/>(GPU, CPU, RAM)
+    F->>F: 2. Validate Input
+    F->>A: 3. POST /api/jobs<br/>{dockerfile, resources}
+    A->>DB: 4. Check User Credits
+    DB-->>A: Credits: $85.50
+    
+    alt Sufficient Credits
+        A->>DB: 5. Create Job Record<br/>(status: 'queued')
+        DB-->>A: Job ID: #123
+        A->>Q: 6. Add Job to Queue<br/>{jobId: 123, resources}
+        Q-->>A: Queued
+        A-->>F: 7. Job Submitted<br/>{jobId: 123}
+        F-->>U: 8. "Job Submitted!"
+        
+        Q->>WM: 9. Poll for Available Worker<br/>Requirements: 2 GPU, 8 CPU
+        WM->>WM: 10. Find Matching Worker<br/>(type: GPU, specs check)
+        
+        alt Worker Available
+            WM->>W: 11. WebSocket: job:new<br/>{jobId: 123, dockerfile, resources}
+            W->>W: 12. Validate Resources<br/>(GPU available?)
+            W->>D: 13. Build Docker Image<br/>FROM user's Dockerfile
+            D-->>W: 14. Build Logs
+            W->>A: 15. WebSocket: job:status<br/>{status: 'building', logs}
+            A->>U: 16. Real-time Update<br/>(Building...)
+            
+            D-->>W: 17. Image Built: job-123:latest
+            W->>D: 18. docker run --gpus 2<br/>--cpus 8 --memory 16g
+            D->>D: 19. Start Container<br/>(Allocate GPU 0,1)
+            D-->>W: 20. Container Started
+            
+            W->>A: 21. WebSocket: job:status<br/>{status: 'running'}
+            A->>DB: 22. UPDATE jobs<br/>SET status='running'<br/>start_time=NOW()
+            A->>U: 23. Real-time Update<br/>(Running on GPU Worker 1)
+            
+            loop Container Execution
+                D->>D: 24. Execute User Code<br/>(GPU Computation)
+                D-->>W: 25. Stream Logs
+                W->>A: 26. WebSocket: job:status<br/>{logs: "Training epoch 1..."}
+                A->>U: 27. Live Logs Stream
+            end
+            
+            D-->>W: 28. Container Exit<br/>(Code: 0, Success)
+            W->>D: 29. Get Output & Cleanup
+            D-->>W: 30. Results + Remove Container
+            
+            W->>A: 31. WebSocket: job:complete<br/>{success: true, output}
+            A->>DB: 32. UPDATE jobs<br/>SET status='completed'<br/>end_time=NOW()
+            
+            A->>A: 33. Calculate Cost<br/>(GPU: 45min × $0.10)<br/>(CPU: 45min × $0.02)
+            A->>DB: 34. INSERT billing<br/>(cost: $5.40)
+            A->>DB: 35. UPDATE users<br/>credits = credits - 5.40
+            
+            WM->>W: 36. Release Worker<br/>(Set status: 'idle')
+            A->>U: 37. Job Complete!<br/>Cost: $5.40<br/>Duration: 45min
+            
+        else No Worker Available
+            Q->>Q: 38. Keep in Queue<br/>(Retry in 5s)
+            A->>U: 39. "Waiting for Resources..."
+        end
+        
+    else Insufficient Credits
+        A-->>F: 40. Error: Insufficient Credits
+        F-->>U: 41. "Please add credits"
+    end
+            </div>
+
+            <div class="component-list">
+                <div class="component-card">
+                    <h4>📤 Job Submission</h4>
+                    <p>User uploads Dockerfile, selects GPU/CPU resources, and submits to the platform via web interface.</p>
+                </div>
+                <div class="component-card">
+                    <h4>🔍 Resource Matching</h4>
+                    <p>Orchestrator finds available worker with matching GPU/CPU specs using the Worker Manager.</p>
+                </div>
+                <div class="component-card">
+                    <h4>🐳 Docker Execution</h4>
+                    <p>Worker builds image from Dockerfile and runs container with allocated GPU/CPU resources.</p>
+                </div>
+                <div class="component-card">
+                    <h4>💰 Billing & Credits</h4>
+                    <p>System calculates cost based on resource usage time and deducts from user's credit balance.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Setup Flow Diagram -->
+        <div class="diagram-section">
+            <h2 class="section-title">
+                <span class="icon">⚙️</span>
+                System Setup Flow
+            </h2>
+            <p class="description">
+                Complete setup procedure for deploying the GPU/CPU rental platform in your college lab environment. 
+                Follow this flow to configure the orchestrator server, worker nodes, and frontend application.
+            </p>
+
+            <div class="mermaid">
+graph TD
+    Start([Start Setup]) --> Install[Install Prerequisites<br/>Node.js 18+<br/>PostgreSQL<br/>Redis<br/>Docker]
+    
+    Install --> Clone[Clone Repository<br/>git clone repo<br/>cd pbl<br/>npm install]
+    
+    Clone --> SetupDB{Setup Database}
+    
+    SetupDB -->|PostgreSQL| CreateDB[Create Database<br/>createdb gpu_rental]
+    CreateDB --> ConfigDB[Configure .env<br/>DATABASE_URL postgresql]
+    
+    SetupDB -->|Redis| StartRedis[Start Redis Server<br/>redis-server]
+    
+    ConfigDB --> Migrate[Run Migrations<br/>cd orchestrator<br/>npm run db:migrate]
+    StartRedis --> Migrate
+    
+    Migrate --> ConfigOrch[Configure Orchestrator<br/>cp .env.example .env<br/>Set JWT_SECRET<br/>Set WORKER_TOKEN]
+    
+    ConfigOrch --> StartOrch[Start Orchestrator<br/>cd orchestrator<br/>npm run dev<br/>Port 3000]
+    
+    StartOrch --> VerifyOrch{Orchestrator<br/>Running?}
+    VerifyOrch -->|No| TroubleshootOrch[Check Logs<br/>logs/combined.log<br/>Fix Issues]
+    TroubleshootOrch --> StartOrch
+    
+    VerifyOrch -->|Yes| SetupWorkers[Setup Worker Nodes<br/>On each GPU/CPU machine]
+    
+    SetupWorkers --> WorkerType{Worker Type?}
+    
+    WorkerType -->|GPU Worker| InstallGPU[Install NVIDIA Drivers<br/>nvidia-driver-525<br/>Install NVIDIA Container Toolkit]
+    WorkerType -->|CPU Worker| InstallCPU[Verify Docker Installed<br/>docker --version]
+    
+    InstallGPU --> VerifyGPU[Verify GPU Support<br/>docker run --gpus all<br/>nvidia/cuda nvidia-smi]
+    
+    VerifyGPU --> ConfigWorker[Configure Worker<br/>cd worker<br/>cp config.example.json config.json]
+    InstallCPU --> ConfigWorker
+    
+    ConfigWorker --> EditWorker[Edit config.json<br/>orchestratorUrl<br/>workerId<br/>workerToken<br/>resources]
+    
+    EditWorker --> StartWorker[Start Worker<br/>npm run dev]
+    
+    StartWorker --> VerifyWorker{Worker<br/>Connected?}
+    VerifyWorker -->|No| TroubleshootWorker[Check<br/>Orchestrator IP correct<br/>Token matches<br/>Firewall allows port 3000]
+    TroubleshootWorker --> StartWorker
+    
+    VerifyWorker -->|Yes| MoreWorkers{More Workers<br/>to Add?}
+    MoreWorkers -->|Yes| SetupWorkers
+    MoreWorkers -->|No| SetupFrontend[Setup Frontend<br/>cd frontend]
+    
+    SetupFrontend --> ConfigFrontend[Configure Frontend<br/>cp .env.local.example .env.local<br/>Set API URL]
+    
+    ConfigFrontend --> StartFrontend[Start Frontend<br/>npm run dev<br/>Port 3001]
+    
+    StartFrontend --> VerifyFrontend{Frontend<br/>Accessible?}
+    VerifyFrontend -->|No| TroubleshootFE[Check<br/>Port 3001 available<br/>API URL correct]
+    TroubleshootFE --> StartFrontend
+    
+    VerifyFrontend -->|Yes| CreateUser[Open Browser<br/>localhost:3001<br/>Create Account]
+    
+    CreateUser --> TestJob[Submit Test Job<br/>Upload Dockerfile<br/>Select Resources<br/>Submit]
+    
+    TestJob --> VerifyJob{Job Completed<br/>Successfully?}
+    VerifyJob -->|No| Debug[Debug<br/>Check worker logs<br/>Check Docker<br/>View job logs in UI]
+    Debug --> TestJob
+    
+    VerifyJob -->|Yes| Success([Setup Complete<br/>System Ready for Use])
+    
+    Success --> Production{Deploy to<br/>Production?}
+    Production -->|Yes| ProdSteps[Production Steps<br/>1 Use PM2 or systemd for orchestrator<br/>2 Setup worker as system service<br/>3 Configure reverse proxy nginx<br/>4 Setup SSL certificates<br/>5 Use production database<br/>6 Enable monitoring]
+    Production -->|No| Development[Continue in Dev Mode<br/>Monitor and Test]
+    
+    ProdSteps --> Final([Production Ready])
+    Development --> Final
+
+    %% Styling
+    classDef startEnd fill:#4caf50,stroke:#2e7d32,stroke-width:3px,color:#fff
+    classDef process fill:#2196f3,stroke:#1565c0,stroke-width:2px,color:#fff
+    classDef decision fill:#ff9800,stroke:#e65100,stroke-width:2px,color:#fff
+    classDef error fill:#f44336,stroke:#c62828,stroke-width:2px,color:#fff
+    classDef success fill:#4caf50,stroke:#2e7d32,stroke-width:2px,color:#fff
+    
+    class Start,Success,Final startEnd
+    class Install,Clone,CreateDB,ConfigDB,StartRedis,Migrate,ConfigOrch,StartOrch,SetupWorkers,InstallGPU,InstallCPU,VerifyGPU,ConfigWorker,EditWorker,StartWorker,SetupFrontend,ConfigFrontend,StartFrontend,CreateUser,TestJob,ProdSteps,Development process
+    class SetupDB,VerifyOrch,WorkerType,VerifyWorker,MoreWorkers,VerifyFrontend,VerifyJob,Production decision
+    class TroubleshootOrch,TroubleshootWorker,TroubleshootFE,Debug error
+            </div>
+
+            <div class="legend">
+                <h3>Setup Steps Summary</h3>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #2196f3;"></div>
+                    <span><strong>Configuration Steps:</strong> Setting up environment files, databases, and services</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #ff9800;"></div>
+                    <span><strong>Decision Points:</strong> Verification checks and conditional paths</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #f44336;"></div>
+                    <span><strong>Troubleshooting:</strong> Debug steps when verification fails</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #4caf50;"></div>
+                    <span><strong>Success States:</strong> Completion milestones and ready states</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Technology Stack -->
+        <div class="diagram-section">
+            <h2 class="section-title">
+                <span class="icon">💻</span>
+                Technology Stack
+            </h2>
+            <p class="description">
+                Complete technology stack powering the GPU/CPU rental platform.
+            </p>
+
+            <div class="component-list">
+                <div class="component-card">
+                    <h4>Frontend</h4>
+                    <div class="tech-stack">
+                        <span class="tech-badge">Next.js 14</span>
+                        <span class="tech-badge">React 18</span>
+                        <span class="tech-badge">TypeScript</span>
+                        <span class="tech-badge">Tailwind CSS</span>
+                        <span class="tech-badge">Socket.io Client</span>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>Backend</h4>
+                    <div class="tech-stack">
+                        <span class="tech-badge">Node.js</span>
+                        <span class="tech-badge">Express</span>
+                        <span class="tech-badge">Socket.io</span>
+                        <span class="tech-badge">JWT</span>
+                        <span class="tech-badge">bcrypt</span>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>Data & Queue</h4>
+                    <div class="tech-stack">
+                        <span class="tech-badge">PostgreSQL</span>
+                        <span class="tech-badge">Redis</span>
+                        <span class="tech-badge">Bull Queue</span>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>Worker & Runtime</h4>
+                    <div class="tech-stack">
+                        <span class="tech-badge">Docker</span>
+                        <span class="tech-badge">Dockerode</span>
+                        <span class="tech-badge">NVIDIA Runtime</span>
+                        <span class="tech-badge">CUDA</span>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>Monitoring</h4>
+                    <div class="tech-stack">
+                        <span class="tech-badge">Winston Logger</span>
+                        <span class="tech-badge">systeminformation</span>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>Communication</h4>
+                    <div class="tech-stack">
+                        <span class="tech-badge">WebSocket</span>
+                        <span class="tech-badge">REST API</span>
+                        <span class="tech-badge">Axios</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Key Features -->
+        <div class="diagram-section">
+            <h2 class="section-title">
+                <span class="icon">✨</span>
+                Key Features
+            </h2>
+            
+            <div class="component-list">
+                <div class="component-card">
+                    <h4>🔐 Secure Authentication</h4>
+                    <p>JWT-based authentication, bcrypt password hashing, role-based access control</p>
+                </div>
+
+                <div class="component-card">
+                    <h4>⚡ Real-time Updates</h4>
+                    <p>WebSocket connections for live job status, log streaming, and worker heartbeat monitoring</p>
+                </div>
+
+                <div class="component-card">
+                    <h4>🎯 Smart Resource Allocation</h4>
+                    <p>Automatic worker selection based on GPU/CPU requirements with validation at multiple layers</p>
+                </div>
+
+                <div class="component-card">
+                    <h4>💰 Usage-based Billing</h4>
+                    <p>Per-minute billing for GPU and CPU usage with automatic credit deduction</p>
+                </div>
+
+                <div class="component-card">
+                    <h4>🔒 Container Isolation</h4>
+                    <p>Docker security features: network isolation, resource limits, read-only filesystem options</p>
+                </div>
+
+                <div class="component-card">
+                    <h4>📊 Job Monitoring</h4>
+                    <p>Real-time logs, resource usage tracking, job history, and detailed billing reports</p>
+                </div>
+
+                <div class="component-card">
+                    <h4>🔄 Auto-reconnection</h4>
+                    <p>Workers automatically reconnect to orchestrator with exponential backoff on connection loss</p>
+                </div>
+
+                <div class="component-card">
+                    <h4>📈 Scalable Queue</h4>
+                    <p>Bull queue with Redis for handling high job throughput and retry mechanisms</p>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>GPU/CPU Rental Platform - Built for Efficient Distributed Computing</p>
+            <p>College Lab Infrastructure Project - 2026</p>
+        </footer>
+    </div>
+
+    <script>
+        // Initialize Mermaid
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            },
+            sequence: {
+                useMaxWidth: true,
+                diagramMarginX: 50,
+                diagramMarginY: 10,
+                actorMargin: 50,
+                width: 150,
+                height: 65,
+                boxMargin: 10,
+                boxTextMargin: 5,
+                noteMargin: 10,
+                messageMargin: 35
+            }
+        });
+
+        // Add smooth scroll behavior
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                document.querySelector(this.getAttribute('href')).scrollIntoView({
+                    behavior: 'smooth'
+                });
+            });
+        });
+
+        // Animate sections on scroll
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -100px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.style.opacity = '1';
+                    entry.target.style.transform = 'translateY(0)';
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.diagram-section').forEach(section => {
+            observer.observe(section);
+        });
+    </script>
+</body>
+</html>
