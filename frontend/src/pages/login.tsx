@@ -28,12 +28,13 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center px-4">
       <div className="max-w-md w-full">
-        <div className="card">
+        <div className="bg-white shadow-lg rounded-2xl p-8">
           <h2 className="text-3xl font-bold text-center text-gray-900 mb-8">
             Sign In
           </h2>
 
           <form onSubmit={handleSubmit} className="space-y-6">
+            {/* Email */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Email
@@ -41,12 +42,14 @@ export default function Login() {
               <input
                 type="email"
                 required
-                className="input w-full placeholder-black"
+                placeholder="Enter your email"
+                className="input w-full placeholder-gray-500 text-black border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
               />
             </div>
 
+            {/* Password */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Password
@@ -54,16 +57,18 @@ export default function Login() {
               <input
                 type="password"
                 required
-                className="input w-full placeholder-black"
+                placeholder="Enter your password"
+                className="input w-full placeholder-gray-500 text-black border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
               />
             </div>
 
+            {/* Submit Button */}
             <button
               type="submit"
               disabled={loading}
-              className="btn-primary w-full"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-lg transition-colors disabled:opacity-50"
             >
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
@@ -71,7 +76,7 @@ export default function Login() {
 
           <p className="mt-6 text-center text-gray-600">
             Don't have an account?{' '}
-            <Link href="/register" className="text-primary-600 hover:text-primary-700 font-semibold">
+            <Link href="/register" className="text-blue-600 hover:text-blue-700 font-semibold">
               Sign up
             </Link>
           </p>

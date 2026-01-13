@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import api from '@/lib/api'
 import { Clock, CheckCircle, XCircle, Loader } from 'lucide-react'
+import JobDetailsModal from './JobDetailsModal'
 
 interface Job {
   id: number
@@ -14,6 +15,7 @@ interface Job {
 export default function JobList() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
+  const [selectedJobId, setSelectedJobId] = useState<number | null>(null)
 
   useEffect(() => {
     loadJobs()
@@ -116,7 +118,7 @@ export default function JobList() {
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {job.resources.gpu ? `${job.resources.gpu} GPU` : ''} 
+                    {job.resources.gpu ? `${job.resources.gpu} GPU` : ''}
                     {job.resources.gpu && job.resources.cpu ? ', ' : ''}
                     {job.resources.cpu} CPU, {job.resources.ram}GB RAM
                   </td>
@@ -124,7 +126,10 @@ export default function JobList() {
                     {new Date(job.createdAt).toLocaleString()}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
-                    <button className="text-primary-600 hover:text-primary-700">
+                    <button
+                      onClick={() => setSelectedJobId(job.id)}
+                      className="text-primary-600 hover:text-primary-700 font-medium"
+                    >
                       View Details
                     </button>
                   </td>
@@ -133,6 +138,14 @@ export default function JobList() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Job Details Modal */}
+      {selectedJobId && (
+        <JobDetailsModal
+          jobId={selectedJobId}
+          onClose={() => setSelectedJobId(null)}
+        />
       )}
     </div>
   )

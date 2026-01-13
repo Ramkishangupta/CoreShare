@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import Sidebar from '@/components/Sidebar'
 import JobSubmissionForm from '@/components/JobSubmissionForm'
 import JobList from '@/components/JobList'
-import StatsCards from '@/components/StatsCards'
+import DashboardStats from '@/components/DashboardStats'
 
 export default function Dashboard() {
   const router = useRouter()
@@ -28,7 +28,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-gray-50 flex">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
-      
+
       <main className="flex-1 p-8">
         <div className="max-w-7xl mx-auto">
           <div className="mb-8">
@@ -36,7 +36,7 @@ export default function Dashboard() {
             <p className="text-gray-600 mt-2">Welcome back, {user.name}!</p>
           </div>
 
-          <StatsCards />
+          <DashboardStats />
 
           <div className="mt-8">
             {activeTab === 'submit' && <JobSubmissionForm />}

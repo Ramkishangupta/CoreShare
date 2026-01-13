@@ -44,11 +44,12 @@ app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/workers', workerRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/stats', require('./routes/stats'));
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     workers: workerManager.getWorkerCount(),
     timestamp: new Date().toISOString()
   });
@@ -57,7 +58,7 @@ app.get('/health', (req, res) => {
 // Socket.io connection handling
 io.on('connection', (socket) => {
   logger.info(`Client connected: ${socket.id}`);
-  
+
   // Worker connection
   socket.on('worker:register', async (data) => {
     try {
@@ -107,17 +108,30 @@ jobScheduler.start();
 // Error handling
 app.use((err, req, res, next) => {
   logger.error(err.stack);
-  res.status(500).json({ 
+  res.status(500).json({
     error: 'Internal server error',
     message: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 
-httpServer.listen(PORT, () => {
-  logger.info(`🚀 Orchestrator server running on port ${PORT}`);
+httpServer.listen(PORT, HOST, () => {
+  logger.info(`🚀 Orchestrator server running on http://${HOST}:${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV}`);
+
+  // Display network URLs
+  const os = require('os');
+  const networkInterfaces = os.networkInterfaces();
+  logger.info('Network URLs:');
+  Object.keys(networkInterfaces).forEach(interfaceName => {
+    networkInterfaces[interfaceName].forEach(iface => {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        logger.info(`  - http://${iface.address}:${PORT}`);
+      }
+    });
+  });
 });
 
 // Graceful shutdown

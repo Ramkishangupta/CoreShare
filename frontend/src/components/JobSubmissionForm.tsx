@@ -14,7 +14,7 @@ export default function JobSubmissionForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!dockerfile.trim()) {
       toast.error('Please provide a Dockerfile')
       return
@@ -52,7 +52,7 @@ export default function JobSubmissionForm() {
             value={dockerfile}
             onChange={(e) => setDockerfile(e.target.value)}
             rows={12}
-            className="input w-full font-mono text-sm"
+            className="input w-full font-mono text-sm text-black placeholder-gray-500 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
             placeholder="FROM ubuntu:latest&#10;RUN apt-get update&#10;# Your Dockerfile content..."
             required
           />
@@ -73,7 +73,7 @@ export default function JobSubmissionForm() {
               max="4"
               value={resources.gpu}
               onChange={(e) => setResources({ ...resources, gpu: parseInt(e.target.value) })}
-              className="input w-full"
+              className="input w-full text-black placeholder-gray-500 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </div>
 
@@ -87,7 +87,7 @@ export default function JobSubmissionForm() {
               max="32"
               value={resources.cpu}
               onChange={(e) => setResources({ ...resources, cpu: parseInt(e.target.value) })}
-              className="input w-full"
+              className="input w-full text-black placeholder-gray-500 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </div>
 
@@ -101,7 +101,7 @@ export default function JobSubmissionForm() {
               max="128"
               value={resources.ram}
               onChange={(e) => setResources({ ...resources, ram: parseInt(e.target.value) })}
-              className="input w-full"
+              className="input w-full text-black placeholder-gray-500 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </div>
         </div>
