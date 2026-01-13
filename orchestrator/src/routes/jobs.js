@@ -138,6 +138,50 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Resubmit job
+router.post('/:id/resubmit', authenticateToken, async (req, res) => {
+  const jobId = req.params.id;
+  const userId = req.user.userId;
+
+  try {
+    // Get original job
+    const result = await db.query(
+      'SELECT * FROM jobs WHERE id = $1 AND user_id = $2',
+      [jobId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    const originalJob = result.rows[0];
+
+    // Create new job with same details
+    const jobScheduler = req.app.locals.jobScheduler;
+    const newJob = await jobScheduler.addJob({
+      userId: userId,
+      dockerfile: originalJob.dockerfile,
+      resources: {
+        gpu: originalJob.resources_requested.gpu || 0,
+        cpu: originalJob.resources_requested.cpu || 2,
+        ram: originalJob.resources_requested.ram || 2
+      },
+      priority: 0
+    });
+
+    res.status(201).json({
+      job: {
+        id: newJob.id,
+        status: newJob.status,
+        createdAt: newJob.created_at
+      }
+    });
+  } catch (error) {
+    console.error('Resubmit job error:', error);
+    res.status(500).json({ error: 'Failed to resubmit job' });
+  }
+});
+
 // Cancel job
 router.post('/:id/cancel', authenticateToken, async (req, res) => {
   const jobId = req.params.id;

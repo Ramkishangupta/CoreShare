@@ -5,7 +5,7 @@ const db = require('../db');
 class JobScheduler {
   constructor(workerManager) {
     this.workerManager = workerManager;
-    
+
     // Create Bull queue
     this.jobQueue = new Queue('gpu-jobs', {
       redis: {
@@ -17,16 +17,25 @@ class JobScheduler {
 
     this.setupQueueHandlers();
   }
+  // Remove null bytes and other problematic control characters from log/result strings
+  sanitizeText(input) {
+    if (!input && input !== '') return input;
+    try {
+      return String(input).replace(/\u0000/g, '');
+    } catch (e) {
+      return '';
+    }
+  }
 
   setupQueueHandlers() {
     // Process jobs from queue
     this.jobQueue.process(async (job) => {
       const jobData = job.data;
       logger.info(`Processing job ${jobData.id} from queue`);
-      
+
       // Find available worker
       const worker = this.workerManager.findAvailableWorker(jobData.resources_requested);
-      
+
       if (!worker) {
         logger.warn(`No available worker for job ${jobData.id}, requeuing`);
         throw new Error('No available worker'); // Will retry
@@ -34,7 +43,7 @@ class JobScheduler {
 
       // Assign job to worker
       const assigned = this.workerManager.assignJobToWorker(worker, jobData);
-      
+
       if (!assigned) {
         throw new Error('Failed to assign job to worker');
       }
@@ -109,7 +118,7 @@ class JobScheduler {
            logs = COALESCE(logs, '') || $2,
            updated_at = NOW()
        WHERE id = $3`,
-      [status, logs || '', jobId]
+      [status, this.sanitizeText(logs) || '', jobId]
     );
 
     logger.info(`Job ${jobId} status updated to ${status}`);
@@ -129,8 +138,8 @@ class JobScheduler {
        RETURNING *`,
       [
         success ? 'completed' : 'failed',
-        result ? JSON.stringify(result) : null,
-        error || null,
+        result ? this.sanitizeText(JSON.stringify(result)) : null,
+        this.sanitizeText(error) || null,
         jobId
       ]
     );
@@ -142,7 +151,7 @@ class JobScheduler {
       const startTime = new Date(job.start_time);
       const endTime = new Date(job.end_time);
       const durationMinutes = Math.ceil((endTime - startTime) / 60000);
-      
+
       const resources = job.resources_requested;
       const gpuCost = (resources.gpu || 0) * durationMinutes * parseFloat(process.env.GPU_PRICE_PER_MINUTE || 0.1);
       const cpuCost = (resources.cpu || 0) * durationMinutes * parseFloat(process.env.CPU_PRICE_PER_MINUTE || 0.02);
@@ -173,7 +182,7 @@ class JobScheduler {
       `UPDATE jobs SET status = 'cancelled', end_time = NOW() WHERE id = $1`,
       [jobId]
     );
-    
+
     // Remove from queue if not started
     const jobs = await this.jobQueue.getJobs(['waiting', 'delayed']);
     const queueJob = jobs.find(j => j.data.id === jobId);

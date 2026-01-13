@@ -1,0 +1,22 @@
+{
+    "orchestratorUrl": "http://localhost:3000",
+    "workerId": "worker-asus-tuf-a16",
+    "workerToken": "worker-secret-token-change-this",
+    "resources": {
+        "type": "CPU",
+        "gpuCount": 0,
+        "cpuCores": 8,
+        "ram": 16,
+        "storage": 500
+    },
+    "docker": {
+        "socketPath": "//./pipe/docker_engine",
+        "maxConcurrentJobs": 2,
+        "defaultTimeout": 3600000,
+        "networkMode": "bridge",
+        "memoryLimit": "8g",
+        "cpuLimit": 6
+    },
+    "heartbeatInterval": 30000,
+    "logLevel": "info"
+}
