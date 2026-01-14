@@ -5,6 +5,36 @@ const db = require('../db');
 
 const router = express.Router();
 
+// Dockerfile validation function
+function validateDockerfile(content) {
+  // Check size (100KB max)
+  if (content.length > 100000) {
+    throw new Error('Dockerfile too large (max 100KB)');
+  }
+
+  // Check for FROM statement
+  if (!/^\s*FROM\s+/mi.test(content)) {
+    throw new Error('Invalid Dockerfile: missing FROM statement');
+  }
+
+  // Blacklist dangerous commands
+  const blacklist = [
+    { pattern: /curl.*\|.*bash/i, message: 'Piping curl to bash is not allowed' },
+    { pattern: /wget.*\|.*sh/i, message: 'Piping wget to shell is not allowed' },
+    { pattern: /--privileged/i, message: 'Privileged mode is not allowed' },
+    { pattern: /--cap-add/i, message: 'Adding capabilities is not allowed' },
+    { pattern: /\/dev\/[a-z]+/i, message: 'Direct device access is not allowed' }
+  ];
+
+  for (const { pattern, message } of blacklist) {
+    if (pattern.test(content)) {
+      throw new Error(`Dockerfile validation failed: ${message}`);
+    }
+  }
+
+  return true;
+}
+
 // Submit new job
 router.post('/',
   authenticateToken,
@@ -24,6 +54,13 @@ router.post('/',
     const userId = req.user.userId;
 
     try {
+      // Validate Dockerfile content
+      try {
+        validateDockerfile(dockerfile);
+      } catch (validationError) {
+        return res.status(400).json({ error: validationError.message });
+      }
+
       // Check user credits
       const userResult = await db.query(
         'SELECT credits FROM users WHERE id = $1',
@@ -72,16 +109,17 @@ router.get('/', authenticateToken, async (req, res) => {
   const { status, limit = 50, offset = 0 } = req.query;
 
   try {
-    let query = 'SELECT * FROM jobs WHERE user_id = $1';
-    const params = [userId];
+    let query;
+    const params = [];
 
+    // Use explicit parameter positions instead of concatenation
     if (status) {
-      query += ' AND status = $2';
-      params.push(status);
+      query = 'SELECT * FROM jobs WHERE user_id = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4';
+      params.push(userId, status, parseInt(limit), parseInt(offset));
+    } else {
+      query = 'SELECT * FROM jobs WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3';
+      params.push(userId, parseInt(limit), parseInt(offset));
     }
-
-    query += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1) + ' OFFSET $' + (params.length + 2);
-    params.push(parseInt(limit), parseInt(offset));
 
     const result = await db.query(query, params);
 

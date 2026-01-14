@@ -7,8 +7,17 @@ const os = require('os');
 class DockerExecutor {
   constructor(config = {}) {
     this.config = config;
+
+    // Platform detection for Windows/Linux Docker socket
+    const getDockerSocketPath = () => {
+      if (process.platform === 'win32') {
+        return '//./pipe/docker_engine'; // Windows named pipe
+      }
+      return '/var/run/docker.sock'; // Linux/Mac Unix socket
+    };
+
     this.docker = new Docker({
-      socketPath: config.socketPath || '/var/run/docker.sock'
+      socketPath: config.socketPath || getDockerSocketPath()
     });
     this.runningContainers = new Map(); // jobId -> container
     this.hasGpuSupport = false;
@@ -34,8 +43,9 @@ class DockerExecutor {
           const { promisify } = require('util');
           const execAsync = promisify(exec);
 
-          const { stdout } = await execAsync('nvidia-smi --query-gpu=count --format=csv,noheader');
-          this.availableGpus = stdout.trim().split('\n').length;
+          // Fix GPU count detection
+          const { stdout } = await execAsync('nvidia-smi --query-gpu=name --format=csv,noheader');
+          this.availableGpus = stdout.trim().split('\n').filter(line => line).length;
           logger.info(`GPU support detected: ${this.availableGpus} GPU(s) available`);
         } catch (error) {
           logger.warn('Could not detect GPU count, assuming GPU support exists');
@@ -229,19 +239,58 @@ class DockerExecutor {
           stderr: true
         });
 
+        // Track output truncation
+        const MAX_OUTPUT = 10000;
         let output = '';
+        let truncated = false;
+
         stream.on('data', (chunk) => {
           const data = chunk.toString().replace(/\u0000/g, '').replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F]/g, '');
-          output += data;
-          onLog && onLog(data);
+
+          // Check if adding this chunk would exceed limit
+          if (output.length + data.length > MAX_OUTPUT) {
+            if (!truncated) {
+              output += data.substring(0, MAX_OUTPUT - output.length);
+              output += '\n\n[OUTPUT TRUNCATED - 10KB LIMIT REACHED]';
+              truncated = true;
+              onLog && onLog('\n\n[OUTPUT TRUNCATED - 10KB LIMIT REACHED]');
+            }
+          } else {
+            output += data;
+            onLog && onLog(data);
+          }
         });
 
         // Start container
         await container.start();
         logger.info(`Container started for job ${jobId}`);
 
-        // Wait for container to finish
-        const statusCode = await container.wait();
+        // Add job timeout (1 hour max)
+        const MAX_JOB_DURATION = 3600000; // 1 hour in milliseconds
+
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('Job exceeded maximum duration (1 hour)'));
+          }, MAX_JOB_DURATION);
+        });
+
+        // Wait for container to finish or timeout
+        const statusCode = await Promise.race([
+          container.wait(),
+          timeoutPromise
+        ]).catch(async (err) => {
+          // Timeout occurred - stop the container
+          if (err.message.includes('maximum duration')) {
+            logger.warn(`Job ${jobId} exceeded timeout, stopping container`);
+            try {
+              await container.stop({ t: 5 });
+            } catch (stopErr) {
+              logger.error('Failed to stop timed-out container:', stopErr);
+            }
+            throw err;
+          }
+          throw err;
+        });
 
         // Get exit code
         const exitCode = statusCode.StatusCode || 0;
@@ -253,7 +302,8 @@ class DockerExecutor {
 
         resolve({
           exitCode,
-          output: output.substring(0, 10000) // Limit output size
+          output,
+          truncated // Include truncation flag
         });
 
       } catch (error) {

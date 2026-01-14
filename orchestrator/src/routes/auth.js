@@ -11,7 +11,7 @@ router.post('/register',
   [
     body('email').isEmail().normalizeEmail(),
     body('password').isLength({ min: 6 }),
-    body('name').trim().notEmpty()
+    body('name').trim().escape().notEmpty() // Added .escape() for XSS protection
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -32,8 +32,8 @@ router.post('/register',
         return res.status(400).json({ error: 'Email already registered' });
       }
 
-      // Hash password
-      const passwordHash = await bcrypt.hash(password, 10);
+      // Hash password (Increased from 10 to 12 rounds)
+      const passwordHash = await bcrypt.hash(password, 12);
 
       // Create user
       const result = await db.query(

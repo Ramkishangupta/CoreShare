@@ -25,8 +25,18 @@ const io = new Server(httpServer, {
   }
 });
 
+// Validate JWT_SECRET on startup
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  logger.error('❌ FATAL: JWT_SECRET must be set and at least 32 characters long');
+  logger.error('Set JWT_SECRET in your .env file');
+  process.exit(1);
+}
+
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+  credentials: true
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -106,11 +116,19 @@ io.on('connection', (socket) => {
 jobScheduler.start();
 
 // Error handling
+// Sanitize errors to prevent information leakage
 app.use((err, req, res, next) => {
-  logger.error(err.stack);
-  res.status(500).json({
+  logger.error('Error occurred:', {
+    message: err.message,
+    stack: err.stack,
+    path: req.path
+  });
+
+  const isDev = process.env.NODE_ENV === 'development';
+  res.status(err.status || 500).json({
     error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined
+    // Only include message in development, never stack trace
+    ...(isDev && { message: err.message })
   });
 });
 

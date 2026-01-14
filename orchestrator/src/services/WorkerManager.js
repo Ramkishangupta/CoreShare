@@ -9,6 +9,9 @@ class WorkerManager {
     this.workers = new Map(); // socketId -> worker data
     this.workersByWorkerId = new Map(); // workerId -> worker data
 
+    // Store interval reference for cleanup
+    this.heartbeatInterval = null;
+
     // Start heartbeat monitor
     this.startHeartbeatMonitor();
   }
@@ -80,6 +83,23 @@ class WorkerManager {
   handleDisconnect(socketId) {
     const worker = this.workers.get(socketId);
     if (worker) {
+      // Fail all running jobs when worker disconnects
+      if (worker.currentJobs && worker.currentJobs.length > 0) {
+        logger.warn(`Worker ${worker.workerId} disconnected with ${worker.currentJobs.length} running jobs`);
+
+        const db = require('../db');
+        for (const jobId of worker.currentJobs) {
+          db.query(
+            `UPDATE jobs 
+             SET status = 'failed', 
+                 end_time = NOW(),
+                 error_message = 'Worker disconnected unexpectedly'
+             WHERE id = $1 AND status = 'running'`,
+            [jobId]
+          ).catch(err => logger.error(`Failed to fail orphaned job ${jobId}:`, err));
+        }
+      }
+
       worker.status = 'offline';
       this.workersByWorkerId.delete(worker.workerId);
       this.workers.delete(socketId);
@@ -96,7 +116,8 @@ class WorkerManager {
   }
 
   startHeartbeatMonitor() {
-    setInterval(() => {
+    // Store interval reference to prevent memory leak
+    this.heartbeatInterval = setInterval(() => {
       const now = Date.now();
       const timeout = 120000; // 2 minutes
 
@@ -107,6 +128,15 @@ class WorkerManager {
         }
       });
     }, 30000); // Check every 30 seconds
+  }
+
+  // Add cleanup method
+  cleanup() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+      logger.info('Worker manager cleanup completed');
+    }
   }
 
   findAvailableWorker(requirements) {
