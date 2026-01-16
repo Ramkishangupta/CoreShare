@@ -5,7 +5,7 @@ const db = require('../db');
 class JobScheduler {
   constructor(workerManager) {
     this.workerManager = workerManager;
-    
+
     // Create Bull queue
     this.jobQueue = new Queue('gpu-jobs', {
       redis: {
@@ -17,16 +17,40 @@ class JobScheduler {
 
     this.setupQueueHandlers();
   }
+  // Remove null bytes and other problematic control characters from log/result strings
+  sanitizeText(input) {
+    if (!input && input !== '') return input;
+    try {
+      return String(input).replace(/\u0000/g, '');
+    } catch (e) {
+      return '';
+    }
+  }
 
   setupQueueHandlers() {
     // Process jobs from queue
     this.jobQueue.process(async (job) => {
       const jobData = job.data;
       logger.info(`Processing job ${jobData.id} from queue`);
-      
+
+      // Re-check credits before execution
+      const userResult = await db.query(
+        'SELECT credits FROM users WHERE id = $1',
+        [jobData.userId]
+      );
+
+      if (!userResult.rows[0] || userResult.rows[0].credits <= 0) {
+        logger.warn(`Job ${jobData.id} cancelled: insufficient credits at execution time`);
+        await db.query(
+          `UPDATE jobs SET status = $1, error_message = $2, end_time = NOW() WHERE id = $3`,
+          ['failed', 'Insufficient credits at execution time', jobData.id]
+        );
+        return; // Don't execute job
+      }
+
       // Find available worker
       const worker = this.workerManager.findAvailableWorker(jobData.resources_requested);
-      
+
       if (!worker) {
         logger.warn(`No available worker for job ${jobData.id}, requeuing`);
         throw new Error('No available worker'); // Will retry
@@ -34,7 +58,7 @@ class JobScheduler {
 
       // Assign job to worker
       const assigned = this.workerManager.assignJobToWorker(worker, jobData);
-      
+
       if (!assigned) {
         throw new Error('Failed to assign job to worker');
       }
@@ -109,7 +133,7 @@ class JobScheduler {
            logs = COALESCE(logs, '') || $2,
            updated_at = NOW()
        WHERE id = $3`,
-      [status, logs || '', jobId]
+      [status, this.sanitizeText(logs) || '', jobId]
     );
 
     logger.info(`Job ${jobId} status updated to ${status}`);
@@ -129,8 +153,8 @@ class JobScheduler {
        RETURNING *`,
       [
         success ? 'completed' : 'failed',
-        result ? JSON.stringify(result) : null,
-        error || null,
+        result ? this.sanitizeText(JSON.stringify(result)) : null,
+        this.sanitizeText(error) || null,
         jobId
       ]
     );
@@ -142,26 +166,56 @@ class JobScheduler {
       const startTime = new Date(job.start_time);
       const endTime = new Date(job.end_time);
       const durationMinutes = Math.ceil((endTime - startTime) / 60000);
-      
+
+      // Validate duration is reasonable
+      if (durationMinutes > 10080) { // 1 week
+        logger.warn(`Abnormally long job duration: ${durationMinutes} minutes for job ${jobId}`);
+      }
+
       const resources = job.resources_requested;
       const gpuCost = (resources.gpu || 0) * durationMinutes * parseFloat(process.env.GPU_PRICE_PER_MINUTE || 0.1);
       const cpuCost = (resources.cpu || 0) * durationMinutes * parseFloat(process.env.CPU_PRICE_PER_MINUTE || 0.02);
       const totalCost = gpuCost + cpuCost;
 
-      // Insert billing record
-      await db.query(
-        `INSERT INTO billing (user_id, job_id, cost, duration_minutes, resources_used)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [job.user_id, jobId, totalCost, durationMinutes, JSON.stringify(resources)]
-      );
+      // Validate cost is reasonable
+      if (totalCost > 1000000 || totalCost < 0 || !isFinite(totalCost)) {
+        logger.error(`Invalid billing cost: ${totalCost} for job ${jobId}`);
+        throw new Error('Billing calculation error');
+      }
 
-      // Deduct from user credits
-      await db.query(
-        'UPDATE users SET credits = credits - $1 WHERE id = $2',
-        [totalCost, job.user_id]
-      );
+      // Use transaction for billing + credit deduction
+      const client = await db.pool.connect();
+      try {
+        await client.query('BEGIN');
 
-      logger.info(`Job ${jobId} completed. Cost: $${totalCost.toFixed(2)}, Duration: ${durationMinutes}min`);
+        // Insert billing record
+        await client.query(
+          `INSERT INTO billing (user_id, job_id, cost, duration_minutes, resources_used)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [job.user_id, jobId, totalCost, durationMinutes, JSON.stringify(resources)]
+        );
+
+        // Deduct from user credits (with validation)
+        const creditResult = await client.query(
+          'UPDATE users SET credits = credits - $1 WHERE id = $2 RETURNING credits',
+          [totalCost, job.user_id]
+        );
+
+        // Check for negative credits (race condition check)
+        if (creditResult.rows[0] && creditResult.rows[0].credits < 0) {
+          logger.error(`User ${job.user_id} has negative credits after job ${jobId}`);
+          // Don't fail - allow negative credits but log it
+        }
+
+        await client.query('COMMIT');
+        logger.info(`Job ${jobId} completed. Cost: $${totalCost.toFixed(2)}, Duration: ${durationMinutes}min`);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        logger.error(`Billing transaction failed for job ${jobId}:`, err);
+        throw err;
+      } finally {
+        client.release();
+      }
     }
 
     // Release worker
@@ -173,7 +227,7 @@ class JobScheduler {
       `UPDATE jobs SET status = 'cancelled', end_time = NOW() WHERE id = $1`,
       [jobId]
     );
-    
+
     // Remove from queue if not started
     const jobs = await this.jobQueue.getJobs(['waiting', 'delayed']);
     const queueJob = jobs.find(j => j.data.id === jobId);

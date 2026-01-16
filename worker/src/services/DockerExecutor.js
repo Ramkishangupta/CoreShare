@@ -5,10 +5,19 @@ const fs = require('fs').promises;
 const os = require('os');
 
 class DockerExecutor {
-  constructor(config) {
+  constructor(config = {}) {
     this.config = config;
+
+    // Platform detection for Windows/Linux Docker socket
+    const getDockerSocketPath = () => {
+      if (process.platform === 'win32') {
+        return '//./pipe/docker_engine'; // Windows named pipe
+      }
+      return '/var/run/docker.sock'; // Linux/Mac Unix socket
+    };
+
     this.docker = new Docker({
-      socketPath: config.socketPath || '/var/run/docker.sock'
+      socketPath: config.socketPath || getDockerSocketPath()
     });
     this.runningContainers = new Map(); // jobId -> container
     this.hasGpuSupport = false;
@@ -22,20 +31,21 @@ class DockerExecutor {
     try {
       // Check Docker version and GPU runtime
       const info = await this.docker.info();
-      
+
       // Check if NVIDIA runtime is available
       if (info.Runtimes && (info.Runtimes.nvidia || info.Runtimes['nvidia-container-runtime'])) {
         this.hasGpuSupport = true;
-        
+
         // Try to detect GPU count
         try {
           // This works if nvidia-smi is available
           const { exec } = require('child_process');
           const { promisify } = require('util');
           const execAsync = promisify(exec);
-          
-          const { stdout } = await execAsync('nvidia-smi --query-gpu=count --format=csv,noheader');
-          this.availableGpus = stdout.trim().split('\n').length;
+
+          // Fix GPU count detection
+          const { stdout } = await execAsync('nvidia-smi --query-gpu=name --format=csv,noheader');
+          this.availableGpus = stdout.trim().split('\n').filter(line => line).length;
           logger.info(`GPU support detected: ${this.availableGpus} GPU(s) available`);
         } catch (error) {
           logger.warn('Could not detect GPU count, assuming GPU support exists');
@@ -44,7 +54,7 @@ class DockerExecutor {
       } else {
         logger.info('No GPU runtime detected. GPU jobs will fail.');
       }
-      
+
       logger.info(`Docker initialized. GPU support: ${this.hasGpuSupport}`);
     } catch (error) {
       logger.error('Failed to initialize Docker executor:', error);
@@ -54,10 +64,10 @@ class DockerExecutor {
 
   async executeDockerfile(dockerfileContent, options) {
     const { jobId, resources, onLog } = options;
-    
+
     // Validate resources before starting
     this.validateResources(resources, onLog);
-    
+
     const buildContext = await this.prepareBuildContext(dockerfileContent, jobId);
 
     try {
@@ -97,7 +107,7 @@ class DockerExecutor {
     return new Promise(async (resolve, reject) => {
       try {
         const tarStream = await this.createTarStream(contextDir);
-        
+
         const stream = await this.docker.buildImage(tarStream, {
           t: imageName,
           rm: true, // Remove intermediate containers
@@ -136,7 +146,7 @@ class DockerExecutor {
   async createTarStream(contextDir) {
     const tar = require('tar');
     const { Readable } = require('stream');
-    
+
     return tar.create(
       {
         gzip: true,
@@ -158,21 +168,21 @@ class DockerExecutor {
         onLog && onLog(`[ERROR] ${error}\n`);
         throw new Error(error);
       }
-      
+
       if (resources.gpu > this.availableGpus) {
         const error = `Requested ${resources.gpu} GPU(s) but only ${this.availableGpus} available`;
         logger.error(error);
         onLog && onLog(`[ERROR] ${error}\n`);
         throw new Error(error);
       }
-      
+
       logger.info(`GPU validation passed: ${resources.gpu} GPU(s) will be allocated`);
       onLog && onLog(`[INFO] Allocating ${resources.gpu} GPU(s)\n`);
     } else {
       logger.info('CPU-only job, no GPU allocation');
       onLog && onLog('[INFO] Running on CPU only\n');
     }
-    
+
     // Log resource allocation
     onLog && onLog(`[RESOURCES] CPU: ${resources.cpu} cores, RAM: ${resources.ram}GB${resources.gpu ? `, GPU: ${resources.gpu}` : ''}\n`);
   }
@@ -189,7 +199,7 @@ class DockerExecutor {
             NanoCpus: (resources.cpu || this.config.cpuLimit) * 1e9,
             NetworkMode: this.config.networkMode || 'none',
             AutoRemove: true,
-            
+
             // GPU allocation (if requested and available)
             ...(resources.gpu && resources.gpu > 0 && this.hasGpuSupport && {
               DeviceRequests: [{
@@ -199,19 +209,19 @@ class DockerExecutor {
                 Options: {}
               }]
             }),
-            
+
             // Additional security constraints
             SecurityOpt: ['no-new-privileges:true'],
             ReadonlyRootfs: false, // Set to true for extra security if app allows
             CapDrop: ['ALL'],
             CapAdd: ['CHOWN', 'SETUID', 'SETGID'] // Minimal capabilities
           },
-          
+
           // Environment variables for GPU (if applicable)
           Env: resources.gpu && resources.gpu > 0 ? [
             'NVIDIA_VISIBLE_DEVICES=all',
             `NVIDIA_DRIVER_CAPABILITIES=compute,utility`,
-            `CUDA_VISIBLE_DEVICES=0${resources.gpu > 1 ? ',' + Array.from({length: resources.gpu - 1}, (_, i) => i + 1).join(',') : ''}`
+            `CUDA_VISIBLE_DEVICES=0${resources.gpu > 1 ? ',' + Array.from({ length: resources.gpu - 1 }, (_, i) => i + 1).join(',') : ''}`
           ] : [],
           Tty: false,
           AttachStdout: true,
@@ -229,19 +239,58 @@ class DockerExecutor {
           stderr: true
         });
 
+        // Track output truncation
+        const MAX_OUTPUT = 10000;
         let output = '';
+        let truncated = false;
+
         stream.on('data', (chunk) => {
-          const data = chunk.toString();
-          output += data;
-          onLog && onLog(data);
+          const data = chunk.toString().replace(/\u0000/g, '').replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F]/g, '');
+
+          // Check if adding this chunk would exceed limit
+          if (output.length + data.length > MAX_OUTPUT) {
+            if (!truncated) {
+              output += data.substring(0, MAX_OUTPUT - output.length);
+              output += '\n\n[OUTPUT TRUNCATED - 10KB LIMIT REACHED]';
+              truncated = true;
+              onLog && onLog('\n\n[OUTPUT TRUNCATED - 10KB LIMIT REACHED]');
+            }
+          } else {
+            output += data;
+            onLog && onLog(data);
+          }
         });
 
         // Start container
         await container.start();
         logger.info(`Container started for job ${jobId}`);
 
-        // Wait for container to finish
-        const statusCode = await container.wait();
+        // Add job timeout (1 hour max)
+        const MAX_JOB_DURATION = 3600000; // 1 hour in milliseconds
+
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('Job exceeded maximum duration (1 hour)'));
+          }, MAX_JOB_DURATION);
+        });
+
+        // Wait for container to finish or timeout
+        const statusCode = await Promise.race([
+          container.wait(),
+          timeoutPromise
+        ]).catch(async (err) => {
+          // Timeout occurred - stop the container
+          if (err.message.includes('maximum duration')) {
+            logger.warn(`Job ${jobId} exceeded timeout, stopping container`);
+            try {
+              await container.stop({ t: 5 });
+            } catch (stopErr) {
+              logger.error('Failed to stop timed-out container:', stopErr);
+            }
+            throw err;
+          }
+          throw err;
+        });
 
         // Get exit code
         const exitCode = statusCode.StatusCode || 0;
@@ -253,7 +302,8 @@ class DockerExecutor {
 
         resolve({
           exitCode,
-          output: output.substring(0, 10000) // Limit output size
+          output,
+          truncated // Include truncation flag
         });
 
       } catch (error) {
@@ -303,15 +353,16 @@ class DockerExecutor {
   }
 
   parseMemory(memoryStr) {
-    if (typeof memoryStr === 'number') return memoryStr;
-    
+    // If a number is provided, treat it as GB (common config uses numbers for GB)
+    if (typeof memoryStr === 'number') return memoryStr * 1024 ** 3;
+
     const units = { k: 1024, m: 1024 ** 2, g: 1024 ** 3 };
-    const match = memoryStr.toLowerCase().match(/^(\d+)([kmg]?)$/);
-    
+    const match = String(memoryStr).toLowerCase().match(/^(\d+)([kmg]?)$/);
+
     if (!match) return 512 * 1024 * 1024; // Default 512MB
-    
+
     const [, amount, unit] = match;
-    return parseInt(amount) * (units[unit] || 1);
+    return parseInt(amount, 10) * (units[unit] || 1);
   }
 }
 

@@ -1,11 +1,14 @@
 const { Pool } = require('pg');
 const logger = require('../utils/logger');
 
+// Add connection pool limits
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 5000, // Increased from 2000
+  maxQueueSize: 100, // Limit queue size
+  queueTimeout: 10000 // Queue timeout
 });
 
 pool.on('error', (err) => {

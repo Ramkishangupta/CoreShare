@@ -14,7 +14,7 @@
     "socketPath": "/var/run/docker.sock",
     "maxConcurrentJobs": 1,
     "defaultTimeout": 3600000,
-    "networkMode": "none",
+    "networkMode": "bridge",
     "memoryLimit": "16g",
     "cpuLimit": 8
   },
