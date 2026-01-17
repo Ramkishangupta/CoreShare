@@ -27,6 +27,27 @@ class JobScheduler {
     }
   }
 
+  // Get GPU price per minute based on model
+  getGPUPrice(gpuModel) {
+    if (!gpuModel || gpuModel.trim() === '') {
+      return parseFloat(process.env.GPU_PRICE_DEFAULT || process.env.GPU_PRICE_PER_MINUTE || 0.10);
+    }
+    
+    // Convert GPU model to env var key
+    // "NVIDIA RTX 4090" → "GPU_PRICE_NVIDIA_RTX_4090"
+    const modelKey = gpuModel
+      .trim()
+      .replace(/\s+/g, '_')
+      .replace(/[^A-Z0-9_]/gi, '')
+      .toUpperCase();
+    
+    const envKey = `GPU_PRICE_${modelKey}`;
+    const price = parseFloat(process.env[envKey] || process.env.GPU_PRICE_DEFAULT || 0.10);
+    
+    logger.debug(`GPU pricing lookup: ${gpuModel} → ${envKey} = $${price}/min`);
+    return price;
+  }
+
   setupQueueHandlers() {
     // Process jobs from queue
     this.jobQueue.process(async (job) => {
@@ -127,20 +148,24 @@ class JobScheduler {
   async updateJobStatus(data) {
     const { jobId, status, logs, metrics } = data;
 
+    // Don't update status if job is already in a terminal state
+    // This prevents race conditions where late status updates overwrite completion
     await db.query(
       `UPDATE jobs 
        SET status = $1, 
            logs = COALESCE(logs, '') || $2,
            updated_at = NOW()
-       WHERE id = $3`,
+       WHERE id = $3 AND status NOT IN ('completed', 'failed', 'cancelled')`,
       [status, this.sanitizeText(logs) || '', jobId]
     );
 
-    logger.info(`Job ${jobId} status updated to ${status}`);
+    logger.debug(`Job ${jobId} status update attempted with status ${status}`);
   }
 
   async handleJobCompletion(data) {
     const { jobId, workerId, success, result, error } = data;
+
+    logger.info(`handleJobCompletion called for job ${jobId}: success=${success}`);
 
     // Update job in database
     const updateResult = await db.query(
@@ -159,6 +184,8 @@ class JobScheduler {
       ]
     );
 
+    logger.info(`Job ${jobId} database update result: ${updateResult.rowCount} rows affected, new status: ${updateResult.rows[0]?.status}`);
+
     const job = updateResult.rows[0];
 
     if (success && job) {
@@ -173,8 +200,21 @@ class JobScheduler {
       }
 
       const resources = job.resources_requested;
-      const gpuCost = (resources.gpu || 0) * durationMinutes * parseFloat(process.env.GPU_PRICE_PER_MINUTE || 0.1);
-      const cpuCost = (resources.cpu || 0) * durationMinutes * parseFloat(process.env.CPU_PRICE_PER_MINUTE || 0.02);
+      
+      // Get worker pricing (use worker's rates if available)
+      const worker = this.workerManager.getWorkerByWorkerId(workerId);
+      const workerPricing = worker?.pricing || { gpuPerMinute: 0.10, cpuPerMinute: 0.02 };
+      
+      // Calculate GPU cost based on worker pricing
+      let gpuCost = 0;
+      if (resources.gpu && resources.gpu > 0) {
+        const gpuModel = resources.gpuModel || '';
+        const pricePerMinute = workerPricing.gpuPerMinute || this.getGPUPrice(gpuModel);
+        gpuCost = resources.gpu * durationMinutes * pricePerMinute;
+        logger.info(`GPU billing: ${resources.gpu}x ${gpuModel || 'Generic'} @ $${pricePerMinute}/min = $${gpuCost.toFixed(2)}`);
+      }
+      
+      const cpuCost = (resources.cpu || 0) * durationMinutes * workerPricing.cpuPerMinute;
       const totalCost = gpuCost + cpuCost;
 
       // Validate cost is reasonable
@@ -218,8 +258,8 @@ class JobScheduler {
       }
     }
 
-    // Release worker
-    this.workerManager.releaseWorker(workerId, jobId);
+    // Release worker - pass job object for HYBRID resource restoration
+    this.workerManager.releaseWorker(workerId, jobId, job);
   }
 
   async cancelJob(jobId) {

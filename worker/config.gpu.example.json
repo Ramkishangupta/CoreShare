@@ -1,0 +1,27 @@
+{
+    "orchestratorUrl": "http://192.168.1.100:3000",
+    "workerId": "worker-lab1-gpu01",
+    "workerToken": "worker-token-change-this-to-something-secure",
+    "resources": {
+        "type": "GPU",
+        "gpuModel": "NVIDIA RTX 3090",
+        "gpuCount": 2,
+        "cpuCores": 0,
+        "ram": 64,
+        "storage": 500
+    },
+    "pricing": {
+        "gpuPerMinute": 0.12,
+        "cpuPerMinute": 0.02
+    },
+    "docker": {
+        "socketPath": "/var/run/docker.sock",
+        "maxConcurrentJobs": 1,
+        "defaultTimeout": 3600000,
+        "networkMode": "none",
+        "memoryLimit": "16g",
+        "cpuLimit": 0
+    },
+    "heartbeatInterval": 30000,
+    "logLevel": "info"
+}

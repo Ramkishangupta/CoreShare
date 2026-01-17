@@ -20,7 +20,7 @@ const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+    origin: process.env.CORS_ORIGIN || 'http://192.168.223.15:3001',
     credentials: true
   }
 });
@@ -32,9 +32,16 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   process.exit(1);
 }
 
+// Validate WORKER_SECRET_TOKEN on startup
+if (!process.env.WORKER_SECRET_TOKEN) {
+  logger.error('❌ FATAL: WORKER_SECRET_TOKEN must be set');
+  logger.error('Set WORKER_SECRET_TOKEN in your .env file');
+  process.exit(1);
+}
+
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+  origin: process.env.CORS_ORIGIN || 'http://localhost:3001',
   credentials: true
 }));
 app.use(express.json());
@@ -99,8 +106,10 @@ io.on('connection', (socket) => {
   // Job completion from worker
   socket.on('job:complete', async (data) => {
     try {
+      logger.info(`Received job:complete event for job ${data.jobId}`);
       await jobScheduler.handleJobCompletion(data);
       io.emit(`job:${data.jobId}:complete`, data);
+      logger.info(`Emitted job:${data.jobId}:complete to all connected clients`);
     } catch (error) {
       logger.error('Job completion handling failed:', error);
     }

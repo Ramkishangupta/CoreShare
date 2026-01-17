@@ -1,0 +1,19 @@
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y stress-ng && \
+    echo '#!/bin/bash' > /test.sh && \
+    echo 'echo "================================"' >> /test.sh && \
+    echo 'echo "Heavy Load Test (CPU Stress)"' >> /test.sh && \
+    echo 'echo "================================"' >> /test.sh && \
+    echo 'echo "CPU: $(nproc) cores"' >> /test.sh && \
+    echo 'echo "Running CPU stress test..."' >> /test.sh && \
+    echo 'echo ""' >> /test.sh && \
+    echo 'for i in {1..20}; do' >> /test.sh && \
+    echo '  echo "Progress: $i/20 - Stressing CPU..."' >> /test.sh && \
+    echo '  stress-ng --cpu $(nproc) --timeout 1s --quiet' >> /test.sh && \
+    echo 'done' >> /test.sh && \
+    echo 'echo ""' >> /test.sh && \
+    echo 'echo "✅ Stress Test Complete!"' >> /test.sh && \
+    chmod +x /test.sh
+
+CMD ["/test.sh"]

@@ -1,16 +1,30 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import api from '@/lib/api'
 import toast from 'react-hot-toast'
 import { Upload } from 'lucide-react'
+import WorkerSelectionCard from './WorkerSelectionCard'
 
 export default function JobSubmissionForm() {
   const [dockerfile, setDockerfile] = useState('')
-  const [resources, setResources] = useState({
-    gpu: 0,
-    cpu: 2,
-    ram: 4
-  })
+  const [workers, setWorkers] = useState<any[]>([])
+  const [selectedWorker, setSelectedWorker] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    fetchWorkers()
+  }, [])
+
+  const fetchWorkers = async () => {
+    try {
+      const res = await api.get('/workers')
+      setWorkers(res.data.workers)
+    } catch (error) {
+      toast.error('Failed to load workers')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -20,17 +34,35 @@ export default function JobSubmissionForm() {
       return
     }
 
+    if (!selectedWorker) {
+      toast.error('Please select a worker')
+      return
+    }
+
     setSubmitting(true)
 
     try {
+      const worker = workers.find(w => w.workerId === selectedWorker)
+      
+      if (!worker) {
+        toast.error('Selected worker not found')
+        return
+      }
+      
       await api.post('/jobs', {
         dockerfile,
-        resources
+        resources: {
+          gpu: worker.specs.gpuCount,
+          cpu: worker.specs.cpuCores,
+          ram: worker.specs.ram,
+          gpuModel: worker.specs.gpuModel
+        },
+        preferredWorkerId: selectedWorker
       })
 
       toast.success('Job submitted successfully!')
       setDockerfile('')
-      setResources({ gpu: 0, cpu: 2, ram: 4 })
+      setSelectedWorker(null)
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to submit job')
     } finally {
@@ -39,93 +71,77 @@ export default function JobSubmissionForm() {
   }
 
   return (
-    <div className="card">
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">Submit New Job</h2>
-
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Dockerfile */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Dockerfile
-          </label>
-          <textarea
-            value={dockerfile}
-            onChange={(e) => setDockerfile(e.target.value)}
-            rows={12}
-            className="input w-full font-mono text-sm text-black placeholder-gray-500 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
-            placeholder="FROM ubuntu:latest&#10;RUN apt-get update&#10;# Your Dockerfile content..."
-            required
-          />
-          <p className="text-sm text-gray-500 mt-1">
-            Paste your Dockerfile content here
-          </p>
-        </div>
-
-        {/* Resources */}
-        <div className="grid md:grid-cols-3 gap-6">
+    <div className="max-w-7xl mx-auto space-y-6">
+      {/* Dockerfile Input */}
+      <div className="card">
+        <h2 className="text-2xl font-bold text-gray-900 mb-4">Submit New Job</h2>
+        
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              GPU Count
+              Dockerfile
             </label>
-            <input
-              type="number"
-              min="0"
-              max="4"
-              value={resources.gpu}
-              onChange={(e) => setResources({ ...resources, gpu: parseInt(e.target.value) })}
-              className="input w-full text-black placeholder-gray-500 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            <textarea
+              value={dockerfile}
+              onChange={(e) => setDockerfile(e.target.value)}
+              rows={12}
+              className="input w-full font-mono text-sm text-black placeholder-gray-500 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              placeholder="FROM ubuntu:latest&#10;RUN apt-get update&#10;# Your Dockerfile content..."
+              required
             />
+            <p className="text-sm text-gray-500 mt-1">
+              Paste your Dockerfile content here
+            </p>
           </div>
 
+          {/* Worker Selection */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              CPU Cores
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="32"
-              value={resources.cpu}
-              onChange={(e) => setResources({ ...resources, cpu: parseInt(e.target.value) })}
-              className="input w-full text-black placeholder-gray-500 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
-            />
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Select Worker</h3>
+            
+            {loading ? (
+              <div className="text-center py-12">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+                <p className="text-gray-500 mt-4">Loading workers...</p>
+              </div>
+            ) : workers.length === 0 ? (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+                <p className="text-yellow-800 font-medium">No workers available</p>
+                <p className="text-yellow-600 text-sm mt-2">
+                  Please wait for workers to connect or contact an administrator
+                </p>
+              </div>
+            ) : (
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {workers.map(worker => (
+                  <WorkerSelectionCard
+                    key={worker.workerId}
+                    worker={worker}
+                    selected={selectedWorker === worker.workerId}
+                    onSelect={setSelectedWorker}
+                  />
+                ))}
+              </div>
+            )}
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              RAM (GB)
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="128"
-              value={resources.ram}
-              onChange={(e) => setResources({ ...resources, ram: parseInt(e.target.value) })}
-              className="input w-full text-black placeholder-gray-500 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
-            />
-          </div>
-        </div>
-
-        {/* Estimated Cost */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <h3 className="font-semibold text-blue-900 mb-2">Estimated Cost</h3>
-          <p className="text-sm text-blue-800">
-            ~${((resources.gpu * 0.10 + resources.cpu * 0.02) * 60).toFixed(2)} per hour
-          </p>
-          <p className="text-xs text-blue-600 mt-1">
-            GPU: $0.10/min • CPU: $0.02/min
-          </p>
-        </div>
-
-        <button
-          type="submit"
-          disabled={submitting}
-          className="btn-primary w-full flex items-center justify-center space-x-2"
-        >
-          <Upload className="w-5 h-5" />
-          <span>{submitting ? 'Submitting...' : 'Submit Job'}</span>
-        </button>
-      </form>
+          {/* Submit Button */}
+          <button
+            type="submit"
+            disabled={submitting || !selectedWorker}
+            className="btn-primary w-full flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Upload className="w-5 h-5" />
+            <span>
+              {submitting 
+                ? 'Submitting...' 
+                : selectedWorker 
+                ? `Submit Job to ${selectedWorker}` 
+                : 'Select a Worker to Submit'
+              }
+            </span>
+          </button>
+        </form>
+      </div>
     </div>
   )
 }

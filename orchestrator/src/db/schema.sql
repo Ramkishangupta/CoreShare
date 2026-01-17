@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS workers (
   socket_id VARCHAR(255),
   last_heartbeat TIMESTAMP,
   current_job_ids JSONB DEFAULT '[]'::jsonb,
+  is_active BOOLEAN DEFAULT true,
+  last_seen_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -92,6 +94,7 @@ CREATE TABLE IF NOT EXISTS api_rate_limits (
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_workers_status ON workers(status);
 CREATE INDEX idx_workers_worker_id ON workers(worker_id);
+CREATE INDEX idx_workers_is_active ON workers(is_active);
 CREATE INDEX idx_jobs_status ON jobs(status);
 CREATE INDEX idx_jobs_user_id ON jobs(user_id);
 CREATE INDEX idx_jobs_worker_id ON jobs(worker_id);

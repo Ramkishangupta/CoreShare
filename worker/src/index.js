@@ -31,6 +31,9 @@ class WorkerAgent {
     // Initialize Docker executor and check GPU availability
     await this.dockerExecutor.initialize();
     
+    // Clean up any leftover Docker images from previous runs
+    await this.dockerExecutor.cleanupOnStartup();
+    
     // Initialize resource monitoring
     await this.resourceMonitor.initialize();
     
@@ -39,6 +42,9 @@ class WorkerAgent {
 
     // Start heartbeat
     this.startHeartbeat();
+
+    // Start periodic image cleanup (every 30 minutes)
+    this.startPeriodicCleanup();
 
     // Handle graceful shutdown
     process.on('SIGTERM', () => this.shutdown());
@@ -103,6 +109,10 @@ class WorkerAgent {
       workerId: this.config.workerId,
       type: this.config.resources.type,
       specs: this.config.resources,
+      pricing: this.config.pricing || {
+        gpuPerMinute: 0.10,
+        cpuPerMinute: 0.02
+      },
       token: this.config.workerToken
     });
   }
@@ -123,6 +133,18 @@ class WorkerAgent {
         });
       }
     }, this.config.heartbeatInterval || 30000);
+  }
+
+  startPeriodicCleanup() {
+    const intervalMinutes = this.config.docker?.pruneIntervalMinutes || 30;
+    const intervalMs = intervalMinutes * 60 * 1000;
+    
+    logger.info(`Starting periodic image cleanup (every ${intervalMinutes} minutes)`);
+    
+    setInterval(async () => {
+      logger.info('Running periodic image cleanup...');
+      await this.dockerExecutor.pruneOldImages();
+    }, intervalMs);
   }
 
   async handleJob(jobData) {
