@@ -29,6 +29,17 @@ class DockerExecutor {
    */
   async initialize() {
     try {
+      // Validate Docker connection first
+      try {
+        await this.docker.ping();
+        logger.info('✅ Docker connection successful');
+      } catch (dockerError) {
+        logger.error('❌ Failed to connect to Docker daemon');
+        logger.error(`Socket path: ${this.docker.modem.socketPath || 'default'}`);
+        logger.error('Make sure Docker is running and accessible');
+        throw new Error(`Docker connection failed: ${dockerError.message}`);
+      }
+
       // Check Docker version and GPU runtime
       const info = await this.docker.info();
 
@@ -52,10 +63,39 @@ class DockerExecutor {
           this.availableGpus = 1; // Assume at least 1 GPU if runtime exists
         }
       } else {
-        logger.info('No GPU runtime detected. GPU jobs will fail.');
+        logger.warn('⚠️  NVIDIA runtime not detected - GPU jobs will fail');
+        this.hasGpuSupport = false;
+        this.availableGpus = 0;
       }
 
-      logger.info(`Docker initialized. GPU support: ${this.hasGpuSupport}`);
+      // Validate worker config against system capabilities
+      const systemCPUs = info.NCPU || os.cpus().length;
+      const systemMemoryGB = Math.floor((info.MemTotal || os.totalmem()) / (1024 ** 3));
+
+      logger.info(`\n📊 System Resources:`);
+      logger.info(`   CPUs: ${systemCPUs} cores`);
+      logger.info(`   Memory: ${systemMemoryGB}GB`);
+      logger.info(`   GPUs: ${this.availableGpus}`);
+
+      // Validate CPU configuration
+      if (this.config.cpuLimit && this.config.cpuLimit > systemCPUs) {
+        logger.error(`\n❌ CONFIG ERROR: cpuLimit (${this.config.cpuLimit}) exceeds system CPUs (${systemCPUs})`);
+        logger.error(`   Fix: Set cpuLimit to ${systemCPUs} or less in config.json`);
+        throw new Error(`Invalid config: cpuLimit ${this.config.cpuLimit} > available CPUs ${systemCPUs}`);
+      }
+
+      // Validate memory configuration
+      const configMemoryGB = this.parseMemory(this.config.memoryLimit) / (1024 ** 3);
+      if (configMemoryGB > systemMemoryGB) {
+        logger.error(`\n❌ CONFIG ERROR: memoryLimit (${this.config.memoryLimit}) exceeds system memory (${systemMemoryGB}GB)`);
+        logger.error(`   Fix: Set memoryLimit to ${systemMemoryGB}g or less in config.json`);
+        throw new Error(`Invalid config: memoryLimit ${this.config.memoryLimit} > available memory ${systemMemoryGB}GB`);
+      }
+
+      logger.info(`\n✅ Configuration validated successfully`);
+      logger.info(`   CPU Limit: ${this.config.cpuLimit || 'unlimited'}`);
+      logger.info(`   Memory Limit: ${this.config.memoryLimit || 'unlimited'}`);
+
     } catch (error) {
       logger.error('Failed to initialize Docker executor:', error);
       throw error;
@@ -169,11 +209,30 @@ class DockerExecutor {
         throw new Error(error);
       }
 
+      // Check GPU count
       if (resources.gpu > this.availableGpus) {
         const error = `Requested ${resources.gpu} GPU(s) but only ${this.availableGpus} available`;
         logger.error(error);
         onLog && onLog(`[ERROR] ${error}\n`);
         throw new Error(error);
+      }
+
+      // Check GPU model if specified in job
+      const workerGpuModel = this.config.resources?.gpuModel;
+      const requestedGpuModel = resources.gpuModel;
+      
+      if (requestedGpuModel && requestedGpuModel.trim() !== '') {
+        if (!workerGpuModel) {
+          logger.warn(`Job requests ${requestedGpuModel} but worker has no gpuModel configured`);
+        } else if (workerGpuModel !== requestedGpuModel) {
+          const error = `Job requires ${requestedGpuModel} but worker has ${workerGpuModel}`;
+          logger.error(error);
+          onLog && onLog(`[ERROR] ${error}\n`);
+          throw new Error(error);
+        } else {
+          logger.info(`GPU model validated: ${workerGpuModel} ✓`);
+          onLog && onLog(`[INFO] Using GPU: ${workerGpuModel}\n`);
+        }
       }
 
       logger.info(`GPU validation passed: ${resources.gpu} GPU(s) will be allocated`);
@@ -190,13 +249,25 @@ class DockerExecutor {
   async runContainer(imageName, jobId, resources, onLog) {
     return new Promise(async (resolve, reject) => {
       try {
+        // Validate CPU request against system limits
+        const systemInfo = await this.docker.info();
+        const systemCPUs = systemInfo.NCPU || os.cpus().length;
+        let requestedCPUs = resources.cpu || this.config.cpuLimit || 1;
+
+        if (requestedCPUs > systemCPUs) {
+          const errorMsg = `Job ${jobId} requests ${requestedCPUs} CPUs but system only has ${systemCPUs} available. Capping to ${systemCPUs}.`;
+          logger.warn(`⚠️  ${errorMsg}`);
+          if (onLog) onLog(`[WARNING] ${errorMsg}\n`);
+          requestedCPUs = systemCPUs;
+        }
+
         // Container configuration
         const containerConfig = {
           Image: imageName,
           name: `job-${jobId}`,
           HostConfig: {
             Memory: this.parseMemory(resources.ram || this.config.memoryLimit),
-            NanoCpus: (resources.cpu || this.config.cpuLimit) * 1e9,
+            NanoCpus: requestedCPUs * 1e9,  // Using validated CPU count
             NetworkMode: this.config.networkMode || 'none',
             AutoRemove: true,
 
@@ -330,14 +401,26 @@ class DockerExecutor {
   }
 
   async cleanup(imageName, contextDir) {
-    // Remove image
+    // Remove image with retry logic
     if (imageName) {
-      try {
-        const image = this.docker.getImage(imageName);
-        await image.remove({ force: true });
-        logger.debug(`Image ${imageName} removed`);
-      } catch (error) {
-        logger.warn(`Failed to remove image ${imageName}:`, error.message);
+      let attempts = 0;
+      const maxAttempts = 2;
+      
+      while (attempts < maxAttempts) {
+        try {
+          const image = this.docker.getImage(imageName);
+          await image.remove({ force: true });
+          logger.info(`✓ Image ${imageName} removed successfully`);
+          break;
+        } catch (error) {
+          attempts++;
+          if (attempts >= maxAttempts) {
+            logger.error(`✗ Failed to remove image ${imageName} after ${maxAttempts} attempts:`, error.message);
+          } else {
+            logger.warn(`Retry ${attempts}/${maxAttempts} for image ${imageName}`);
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
+          }
+        }
       }
     }
 
@@ -352,17 +435,122 @@ class DockerExecutor {
     }
   }
 
+  /**
+   * Prune old Docker images to prevent disk space exhaustion
+   * Removes: dangling images, old job images (older than 1 hour)
+   */
+  async pruneOldImages() {
+    try {
+      logger.info('Starting Docker image cleanup...');
+      
+      // Get all images
+      const images = await this.docker.listImages();
+      const oneHourAgo = Date.now() - (60 * 60 * 1000);
+      let removedCount = 0;
+      
+      // Remove old job-* images
+      for (const imageInfo of images) {
+        const tags = imageInfo.RepoTags || [];
+        const createdMs = imageInfo.Created * 1000;
+        
+        // Check if this is a job image and older than 1 hour
+        const isJobImage = tags.some(tag => tag.startsWith('job-'));
+        if (isJobImage && createdMs < oneHourAgo) {
+          try {
+            const image = this.docker.getImage(imageInfo.Id);
+            await image.remove({ force: true });
+            logger.info(`Pruned old image: ${tags[0] || imageInfo.Id.substring(0, 12)}`);
+            removedCount++;
+          } catch (error) {
+            logger.debug(`Could not remove image ${imageInfo.Id.substring(0, 12)}: ${error.message}`);
+          }
+        }
+      }
+      
+      // Prune dangling images (untagged)
+      try {
+        const pruneResult = await this.docker.pruneImages({
+          filters: { dangling: { true: true } }
+        });
+        
+        if (pruneResult.ImagesDeleted) {
+          removedCount += pruneResult.ImagesDeleted.length;
+          logger.info(`Pruned ${pruneResult.ImagesDeleted.length} dangling images`);
+        }
+        
+        if (pruneResult.SpaceReclaimed) {
+          const mbReclaimed = (pruneResult.SpaceReclaimed / (1024 * 1024)).toFixed(2);
+          logger.info(`Space reclaimed: ${mbReclaimed} MB`);
+        }
+      } catch (error) {
+        logger.warn('Failed to prune dangling images:', error.message);
+      }
+      
+      logger.info(`Image cleanup complete. Removed ${removedCount} images.`);
+      return removedCount;
+    } catch (error) {
+      logger.error('Error during image pruning:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Clean up all leftover job images on worker startup
+   */
+  async cleanupOnStartup() {
+    try {
+      logger.info('Running startup cleanup for leftover job images...');
+      
+      const images = await this.docker.listImages();
+      let removedCount = 0;
+      
+      for (const imageInfo of images) {
+        const tags = imageInfo.RepoTags || [];
+        
+        // Check if this is a job image
+        const isJobImage = tags.some(tag => tag.startsWith('job-'));
+        if (isJobImage) {
+          try {
+            const image = this.docker.getImage(imageInfo.Id);
+            await image.remove({ force: true });
+            logger.info(`Removed leftover image: ${tags[0] || imageInfo.Id.substring(0, 12)}`);
+            removedCount++;
+          } catch (error) {
+            logger.debug(`Could not remove image ${imageInfo.Id.substring(0, 12)}: ${error.message}`);
+          }
+        }
+      }
+      
+      logger.info(`Startup cleanup complete. Removed ${removedCount} leftover images.`);
+      return removedCount;
+    } catch (error) {
+      logger.error('Error during startup cleanup:', error);
+      return 0;
+    }
+  }
+
   parseMemory(memoryStr) {
     // If a number is provided, treat it as GB (common config uses numbers for GB)
-    if (typeof memoryStr === 'number') return memoryStr * 1024 ** 3;
+    if (typeof memoryStr === 'number') {
+      const bytes = memoryStr * 1024 ** 3;
+      logger.info(`Memory limit: ${memoryStr}GB = ${bytes} bytes`);
+      // Enforce minimum 6MB required by Docker
+      return Math.max(bytes, 6 * 1024 * 1024);
+    }
 
     const units = { k: 1024, m: 1024 ** 2, g: 1024 ** 3 };
     const match = String(memoryStr).toLowerCase().match(/^(\d+)([kmg]?)$/);
 
-    if (!match) return 512 * 1024 * 1024; // Default 512MB
+    if (!match) {
+      logger.warn(`Invalid memory format: ${memoryStr}, using default 512MB`);
+      return 512 * 1024 * 1024; // Default 512MB
+    }
 
     const [, amount, unit] = match;
-    return parseInt(amount, 10) * (units[unit] || 1);
+    const bytes = parseInt(amount, 10) * (units[unit] || 1);
+    logger.info(`Memory limit: ${memoryStr} = ${bytes} bytes`);
+    // Enforce minimum 6MB required by Docker
+    return Math.max(bytes, 6 * 1024 * 1024);
   }
 }
 

@@ -1,0 +1,16 @@
+FROM ubuntu:22.04
+
+RUN echo '#!/bin/bash' > /test.sh && \
+    echo 'echo "================================"' >> /test.sh && \
+    echo 'echo "Quick Test - 10 seconds"' >> /test.sh && \
+    echo 'echo "================================"' >> /test.sh && \
+    echo 'echo "CPU: $(nproc) cores"' >> /test.sh && \
+    echo 'echo ""' >> /test.sh && \
+    echo 'for i in {1..10}; do' >> /test.sh && \
+    echo '  echo "Progress: $i/10"' >> /test.sh && \
+    echo '  sleep 1' >> /test.sh && \
+    echo 'done' >> /test.sh && \
+    echo 'echo "✅ Complete!"' >> /test.sh && \
+    chmod +x /test.sh
+
+CMD ["/test.sh"]

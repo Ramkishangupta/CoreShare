@@ -1,0 +1,18 @@
+FROM python:3.9-slim
+
+RUN echo '#!/bin/bash' > /test.sh && \
+    echo 'echo "================================"' >> /test.sh && \
+    echo 'echo "Python Processing Test"' >> /test.sh && \
+    echo 'echo "================================"' >> /test.sh && \
+    echo 'python3 -c "' >> /test.sh && \
+    echo 'import time' >> /test.sh && \
+    echo 'import sys' >> /test.sh && \
+    echo 'for i in range(1, 31):' >> /test.sh && \
+    echo '    print(f\"Processing item {i}/30...\")' >> /test.sh && \
+    echo '    sys.stdout.flush()' >> /test.sh && \
+    echo '    time.sleep(0.5)' >> /test.sh && \
+    echo 'print(\"\\n✅ All items processed!\")' >> /test.sh && \
+    echo '"' >> /test.sh && \
+    chmod +x /test.sh
+
+CMD ["/test.sh"]

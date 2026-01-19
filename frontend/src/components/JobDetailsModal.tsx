@@ -70,6 +70,36 @@ export default function JobDetailsModal({ jobId, onClose }: JobDetailsModalProps
         loadJob()
     }, [jobId])
 
+    // Polling fallback for job status updates
+    useEffect(() => {
+        // Only poll for running or queued jobs
+        if (!job || (job.status !== 'running' && job.status !== 'queued')) {
+            return
+        }
+
+        const pollInterval = setInterval(async () => {
+            try {
+                const response = await api.get(`/jobs/${jobId}`)
+                let jobData = response.data.job || response.data
+
+                const normalized = {
+                    ...jobData,
+                    created_at: jobData.created_at || jobData.createdAt,
+                    start_time: jobData.start_time || jobData.startTime,
+                    end_time: jobData.end_time || jobData.endTime,
+                    resources: jobData.resources || jobData.resources_requested || { cpu: 0, ram: 0, gpu: 0 }
+                }
+
+                setJob(normalized)
+                setLogs(normalized.logs || '')
+            } catch (error) {
+                console.error('Failed to poll job status:', error)
+            }
+        }, 3000) // Poll every 3 seconds
+
+        return () => clearInterval(pollInterval)
+    }, [jobId, job?.status])
+
     // Socket.io for real-time logs
     useEffect(() => {
         const orchestratorUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3000'

@@ -1,0 +1,33 @@
+{
+    "orchestratorUrl": "http://192.168.1.100:3000",
+    "workerId": "worker-hybrid-01",
+    "workerToken": "worker-token-change-this-to-something-secure",
+    "resources": {
+        "type": "HYBRID",
+        "gpu": {
+            "model": "NVIDIA RTX 4090",
+            "count": 2
+        },
+        "cpuCores": 16,
+        "ram": 64,
+        "storage": 500,
+        "reservation": {
+            "gpuModeCPU": 4,
+            "gpuModeRAM": 32
+        }
+    },
+    "pricing": {
+        "gpuPerMinute": 0.15,
+        "cpuPerMinute": 0.02
+    },
+    "docker": {
+        "socketPath": "/var/run/docker.sock",
+        "maxConcurrentJobs": 2,
+        "defaultTimeout": 3600000,
+        "networkMode": "none",
+        "memoryLimit": "32g",
+        "cpuLimit": 12
+    },
+    "heartbeatInterval": 30000,
+    "logLevel": "info"
+}

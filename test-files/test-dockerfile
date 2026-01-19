@@ -1,0 +1,21 @@
+FROM ubuntu:22.04
+
+RUN echo '#!/bin/bash' > /test.sh && \
+    echo 'echo "================================"' >> /test.sh && \
+    echo 'echo "GPU Cloud Platform Test"' >> /test.sh && \
+    echo 'echo "================================"' >> /test.sh && \
+    echo 'echo "Started: $(date)"' >> /test.sh && \
+    echo 'echo "Hostname: $(hostname)"' >> /test.sh && \
+    echo 'echo "CPU: $(nproc) cores"' >> /test.sh && \
+    echo 'echo ""' >> /test.sh && \
+    echo 'echo "=== Long Running Test ==="' >> /test.sh && \
+    echo 'for i in {1..30}; do' >> /test.sh && \
+    echo '  echo "Progress: $i/30"' >> /test.sh && \
+    echo '  sleep 1' >> /test.sh && \
+    echo 'done' >> /test.sh && \
+    echo 'echo "✅ Complete!"' >> /test.sh && \
+    echo 'echo ""' >> /test.sh && \
+    echo 'echo "Completed: $(date)"' >> /test.sh && \
+    chmod +x /test.sh
+
+CMD ["/test.sh"]

@@ -1,0 +1,27 @@
+{
+  "orchestratorUrl": "http://192.168.1.100:3000",
+  "workerId": "worker-lab2-cpu01",
+  "workerToken": "worker-token-change-this-to-something-secure",
+  "resources": {
+    "type": "CPU",
+    "gpuModel": null,
+    "gpuCount": 0,
+    "cpuCores": 16,
+    "ram": 32,
+    "storage": 500
+  },
+  "pricing": {
+    "cpuPerMinute": 0.02,
+    "gpuPerMinute": 0
+  },
+  "docker": {
+    "socketPath": "/var/run/docker.sock",
+    "maxConcurrentJobs": 2,
+    "defaultTimeout": 3600000,
+    "networkMode": "none",
+    "memoryLimit": "16g",
+    "cpuLimit": 12
+  },
+  "heartbeatInterval": 30000,
+  "logLevel": "info"
+}
