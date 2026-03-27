@@ -27,14 +27,12 @@ class JobScheduler {
     }
   }
 
-  // Get GPU price per minute based on model
+  // Get GPU price per minute based on model (Fallback if worker doesn't specify pricing)
   getGPUPrice(gpuModel) {
     if (!gpuModel || gpuModel.trim() === '') {
       return parseFloat(process.env.GPU_PRICE_DEFAULT || process.env.GPU_PRICE_PER_MINUTE || 0.10);
     }
     
-    // Convert GPU model to env var key
-    // "NVIDIA RTX 4090" → "GPU_PRICE_NVIDIA_RTX_4090"
     const modelKey = gpuModel
       .trim()
       .replace(/\s+/g, '_')
@@ -48,26 +46,16 @@ class JobScheduler {
     return price;
   }
 
+  // Get CPU price per minute (Fallback if worker doesn't specify pricing)
+  getCPUPrice() {
+    return parseFloat(process.env.CPU_PRICE_PER_MINUTE || 0.02);
+  }
+
   setupQueueHandlers() {
     // Process jobs from queue
     this.jobQueue.process(async (job) => {
       const jobData = job.data;
       logger.info(`Processing job ${jobData.id} from queue`);
-
-      // Re-check credits before execution
-      const userResult = await db.query(
-        'SELECT credits FROM users WHERE id = $1',
-        [jobData.userId]
-      );
-
-      if (!userResult.rows[0] || userResult.rows[0].credits <= 0) {
-        logger.warn(`Job ${jobData.id} cancelled: insufficient credits at execution time`);
-        await db.query(
-          `UPDATE jobs SET status = $1, error_message = $2, end_time = NOW() WHERE id = $3`,
-          ['failed', 'Insufficient credits at execution time', jobData.id]
-        );
-        return; // Don't execute job
-      }
 
       // Find available worker
       const worker = this.workerManager.findAvailableWorker(jobData.resources_requested);
@@ -78,21 +66,28 @@ class JobScheduler {
       }
 
       // Assign job to worker
-      const assigned = this.workerManager.assignJobToWorker(worker, jobData);
+      const assigned = await this.workerManager.assignJobToWorker(worker, jobData);
 
       if (!assigned) {
         throw new Error('Failed to assign job to worker');
       }
 
       // Update job status in database
-      await db.query(
-        `UPDATE jobs 
-         SET status = 'running', 
-             worker_id = (SELECT id FROM workers WHERE worker_id = $1),
-             start_time = NOW()
-         WHERE id = $2`,
-        [worker.workerId, jobData.id]
-      );
+      try {
+        await db.query(
+          `UPDATE jobs 
+           SET status = 'running', 
+               worker_id = (SELECT id FROM workers WHERE worker_id = $1),
+               start_time = NOW()
+           WHERE id = $2`,
+          [worker.workerId, jobData.id]
+        );
+      } catch (dbError) {
+        // Assignment already accepted by worker; try to cancel remote run and unlock worker.
+        this.workerManager.cancelJobOnWorker(worker.workerId, jobData.id);
+        this.workerManager.releaseWorker(worker.workerId, jobData.id);
+        throw dbError;
+      }
 
       return { jobId: jobData.id, workerId: worker.workerId };
     });
@@ -166,100 +161,112 @@ class JobScheduler {
     const { jobId, workerId, success, result, error } = data;
 
     logger.info(`handleJobCompletion called for job ${jobId}: success=${success}`);
+    const client = await db.pool.connect();
+    let job;
+    try {
+      await client.query('BEGIN');
 
-    // Update job in database
-    const updateResult = await db.query(
-      `UPDATE jobs 
-       SET status = $1,
-           end_time = NOW(),
-           result = $2,
-           error_message = $3
-       WHERE id = $4
-       RETURNING *`,
-      [
-        success ? 'completed' : 'failed',
-        result ? this.sanitizeText(JSON.stringify(result)) : null,
-        this.sanitizeText(error) || null,
-        jobId
-      ]
-    );
+      // Idempotency guard: only allow first terminal transition.
+      const updateResult = await client.query(
+        `UPDATE jobs 
+         SET status = $1,
+             end_time = NOW(),
+             result = $2,
+             error_message = $3
+         WHERE id = $4
+           AND status NOT IN ('completed', 'failed', 'cancelled')
+         RETURNING *`,
+        [
+          success ? 'completed' : 'failed',
+          result || null,
+          this.sanitizeText(error) || null,
+          jobId
+        ]
+      );
 
-    logger.info(`Job ${jobId} database update result: ${updateResult.rowCount} rows affected, new status: ${updateResult.rows[0]?.status}`);
-
-    const job = updateResult.rows[0];
-
-    if (success && job) {
-      // Calculate cost
-      const startTime = new Date(job.start_time);
-      const endTime = new Date(job.end_time);
-      const durationMinutes = Math.ceil((endTime - startTime) / 60000);
-
-      // Validate duration is reasonable
-      if (durationMinutes > 10080) { // 1 week
-        logger.warn(`Abnormally long job duration: ${durationMinutes} minutes for job ${jobId}`);
+      if (updateResult.rowCount === 0) {
+        await client.query('ROLLBACK');
+        logger.warn(`Ignoring duplicate or stale completion event for job ${jobId}`);
+        return;
       }
 
-      const resources = job.resources_requested;
-      
-      // Get worker pricing (use worker's rates if available)
-      const worker = this.workerManager.getWorkerByWorkerId(workerId);
-      const workerPricing = worker?.pricing || { gpuPerMinute: 0.10, cpuPerMinute: 0.02 };
-      
-      // Calculate GPU cost based on worker pricing
-      let gpuCost = 0;
-      if (resources.gpu && resources.gpu > 0) {
-        const gpuModel = resources.gpuModel || '';
-        const pricePerMinute = workerPricing.gpuPerMinute || this.getGPUPrice(gpuModel);
-        gpuCost = resources.gpu * durationMinutes * pricePerMinute;
-        logger.info(`GPU billing: ${resources.gpu}x ${gpuModel || 'Generic'} @ $${pricePerMinute}/min = $${gpuCost.toFixed(2)}`);
-      }
-      
-      const cpuCost = (resources.cpu || 0) * durationMinutes * workerPricing.cpuPerMinute;
-      const totalCost = gpuCost + cpuCost;
+      logger.info(`Job ${jobId} database update result: ${updateResult.rowCount} rows affected, new status: ${updateResult.rows[0]?.status}`);
+      job = updateResult.rows[0];
 
-      // Validate cost is reasonable
-      if (totalCost > 1000000 || totalCost < 0 || !isFinite(totalCost)) {
-        logger.error(`Invalid billing cost: ${totalCost} for job ${jobId}`);
-        throw new Error('Billing calculation error');
-      }
+      if (success) {
+        // Calculate cost
+        const startTime = new Date(job.start_time);
+        const endTime = new Date(job.end_time);
+        const durationMinutes = Math.ceil((endTime - startTime) / 60000);
 
-      // Use transaction for billing + credit deduction
-      const client = await db.pool.connect();
-      try {
-        await client.query('BEGIN');
-
-        // Insert billing record
-        await client.query(
-          `INSERT INTO billing (user_id, job_id, cost, duration_minutes, resources_used)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [job.user_id, jobId, totalCost, durationMinutes, JSON.stringify(resources)]
-        );
-
-        // Deduct from user credits (with validation)
-        const creditResult = await client.query(
-          'UPDATE users SET credits = credits - $1 WHERE id = $2 RETURNING credits',
-          [totalCost, job.user_id]
-        );
-
-        // Check for negative credits (race condition check)
-        if (creditResult.rows[0] && creditResult.rows[0].credits < 0) {
-          logger.error(`User ${job.user_id} has negative credits after job ${jobId}`);
-          // Don't fail - allow negative credits but log it
+        // Validate duration is reasonable
+        if (durationMinutes > 10080) { // 1 week
+          logger.warn(`Abnormally long job duration: ${durationMinutes} minutes for job ${jobId}`);
         }
 
-        await client.query('COMMIT');
-        logger.info(`Job ${jobId} completed. Cost: $${totalCost.toFixed(2)}, Duration: ${durationMinutes}min`);
-      } catch (err) {
-        await client.query('ROLLBACK');
-        logger.error(`Billing transaction failed for job ${jobId}:`, err);
-        throw err;
-      } finally {
-        client.release();
-      }
-    }
+        const resources = job.resources_requested;
+        
+        // Get worker pricing (use worker's rates if available, otherwise fallback)
+        const worker = this.workerManager.getWorkerByWorkerId(workerId);
+        const pricing = worker?.pricing || {};
+        
+        // Calculate GPU cost
+        let gpuCost = 0;
+        if (resources.gpu && resources.gpu > 0) {
+          const gpuModel = resources.gpuModel || '';
+          // Properly check if gpuPerMinute is defined (respects 0)
+          const pricePerMinute = pricing.gpuPerMinute !== undefined 
+            ? pricing.gpuPerMinute 
+            : this.getGPUPrice(gpuModel);
+            
+          gpuCost = resources.gpu * durationMinutes * pricePerMinute;
+          logger.info(`GPU billing: ${resources.gpu}x ${gpuModel || 'Generic'} @ $${pricePerMinute}/min = $${gpuCost.toFixed(2)}`);
+        }
+        
+        const cpuPricePerMinute = pricing.cpuPerMinute !== undefined 
+          ? pricing.cpuPerMinute 
+          : this.getCPUPrice();
+          
+        const cpuCost = (resources.cpu || 0) * durationMinutes * cpuPricePerMinute;
+        const totalCost = gpuCost + cpuCost;
 
-    // Release worker - pass job object for HYBRID resource restoration
-    this.workerManager.releaseWorker(workerId, jobId, job);
+        // Validate cost is reasonable
+        if (totalCost > 1000000 || totalCost < 0 || !isFinite(totalCost)) {
+          logger.error(`Invalid billing cost: ${totalCost} for job ${jobId}`);
+          throw new Error('Billing calculation error');
+        }
+
+        // Insert billing record only once per job.
+        const existingBilling = await client.query(
+          'SELECT id FROM billing WHERE job_id = $1 LIMIT 1',
+          [jobId]
+        );
+
+        if (existingBilling.rowCount === 0) {
+          await client.query(
+            `INSERT INTO billing (user_id, job_id, cost, duration_minutes, resources_used)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [job.user_id, jobId, totalCost, durationMinutes, JSON.stringify(resources)]
+          );
+
+
+        } else {
+          logger.warn(`Billing already exists for job ${jobId}, skipping duplicate billing`);
+        }
+
+        logger.info(`Job ${jobId} completed. Cost: $${totalCost.toFixed(2)}, Duration: ${durationMinutes}min`);
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      logger.error(`Billing/completion transaction failed for job ${jobId}:`, err);
+      throw err;
+    } finally {
+      client.release();
+      // Always release worker lock even if completion processing fails.
+      this.workerManager.releaseWorker(workerId, jobId, job);
+    }
   }
 
   async cancelJob(jobId) {

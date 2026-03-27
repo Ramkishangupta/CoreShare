@@ -32,7 +32,7 @@ router.post('/register',
         return res.status(400).json({ error: 'Email already registered' });
       }
 
-      // Hash password (Increased from 10 to 12 rounds)
+      // Hash password
       const passwordHash = await bcrypt.hash(password, 12);
 
       // Create user

@@ -5,10 +5,8 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NOT NULL,
   name VARCHAR(255) NOT NULL,
   role VARCHAR(50) DEFAULT 'user',
-  credits DECIMAL(10, 2) DEFAULT 100.00,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT check_credits_non_negative CHECK (credits >= 0)
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Workers table

@@ -22,16 +22,6 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
       </div>
 
       <div className="p-4">
-        <div className="card mb-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-600">Credits</span>
-            <CreditCard className="w-4 h-4 text-gray-400" />
-          </div>
-          <p className="text-2xl font-bold text-gray-900 mt-1">
-            ${user?.credits.toFixed(2)}
-          </p>
-        </div>
-
         <nav className="space-y-1">
           {menuItems.map((item) => {
             const Icon = item.icon

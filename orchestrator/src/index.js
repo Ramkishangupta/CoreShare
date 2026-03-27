@@ -80,7 +80,6 @@ io.on('connection', (socket) => {
   socket.on('worker:register', async (data) => {
     try {
       await workerManager.registerWorker(socket, data);
-      logger.info(`Worker registered: ${data.workerId}`);
     } catch (error) {
       logger.error('Worker registration failed:', error);
       socket.emit('error', { message: 'Registration failed' });
@@ -162,12 +161,16 @@ httpServer.listen(PORT, HOST, () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM signal received: closing HTTP server');
+const gracefulShutdown = (signal) => {
+  logger.info(`${signal} signal received: closing HTTP server`);
   httpServer.close(() => {
     logger.info('HTTP server closed');
+    io.close();
+    workerManager.stop();
     jobScheduler.stop();
     db.pool.end();
     process.exit(0);
   });
-});
+};
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

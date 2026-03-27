@@ -15,12 +15,25 @@ class WorkerAgent {
     }
 
     this.config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+
+    // Log loaded configuration for debugging
+    logger.info('Configuration loaded successfully');
+    logger.info(`Worker ID: ${this.config.workerId}`);
+    logger.info(`Orchestrator URL: ${this.config.orchestratorUrl}`);
+    logger.info(`Worker Type: ${this.config.resources.type}`);
+    logger.info(`Resources: ${this.config.resources.cpuCores} CPU cores, ${this.config.resources.ram}GB RAM, ${this.config.resources.gpuCount} GPUs`);
+    logger.info(`Docker socket: ${this.config.docker.socketPath}`);
+    logger.info(`Network mode: ${this.config.docker.networkMode}`);
+
     this.socket = null;
     this.dockerExecutor = new DockerExecutor(this.config.docker);
     this.resourceMonitor = new ResourceMonitor();
     this.currentJobs = new Map();
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
+    this.shuttingDown = false;
+    this.heartbeatInterval = null;
+    this.cleanupInterval = null;
   }
 
   async start() {
@@ -41,10 +54,10 @@ class WorkerAgent {
     this.connect();
 
     // Start heartbeat
-    this.startHeartbeat();
+    this.heartbeatInterval = this.startHeartbeat();
 
     // Start periodic image cleanup (every 30 minutes)
-    this.startPeriodicCleanup();
+    this.cleanupInterval = this.startPeriodicCleanup();
 
     // Handle graceful shutdown
     process.on('SIGTERM', () => this.shutdown());
@@ -87,8 +100,22 @@ class WorkerAgent {
       logger.info('Registration confirmed by orchestrator');
     });
 
-    this.socket.on('job:new', async (jobData) => {
+    this.socket.on('job:new', async (jobData, ack) => {
       logger.info(`Received new job: ${jobData.jobId}`);
+
+      const maxJobs = this.config.docker?.maxConcurrentJobs || 1;
+      const alreadyProcessing = this.currentJobs.has(jobData.jobId);
+      const atCapacity = this.currentJobs.size >= maxJobs;
+
+      if (typeof ack === 'function') {
+        ack({ accepted: !alreadyProcessing && !atCapacity });
+      }
+
+      if (alreadyProcessing || atCapacity) {
+        logger.warn(`Rejecting job ${jobData.jobId}: ${alreadyProcessing ? 'duplicate' : 'at capacity (${this.currentJobs.size}/${maxJobs})'}`);
+        return;
+      }
+
       await this.handleJob(jobData);
     });
 
@@ -118,7 +145,7 @@ class WorkerAgent {
   }
 
   startHeartbeat() {
-    setInterval(async () => {
+    return setInterval(async () => {
       if (this.socket && this.socket.connected) {
         const metrics = await this.resourceMonitor.getMetrics();
         
@@ -141,7 +168,7 @@ class WorkerAgent {
     
     logger.info(`Starting periodic image cleanup (every ${intervalMinutes} minutes)`);
     
-    setInterval(async () => {
+    return setInterval(async () => {
       logger.info('Running periodic image cleanup...');
       await this.dockerExecutor.pruneOldImages();
     }, intervalMs);
@@ -229,7 +256,14 @@ class WorkerAgent {
   }
 
   async shutdown() {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+
     logger.info('Shutting down worker agent...');
+
+    // Clear intervals
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+    if (this.cleanupInterval) clearInterval(this.cleanupInterval);
 
     // Cancel all running jobs
     for (const [jobId] of this.currentJobs) {

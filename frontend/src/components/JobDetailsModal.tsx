@@ -169,16 +169,19 @@ export default function JobDetailsModal({ jobId, onClose }: JobDetailsModalProps
         return `${seconds}s`
     }
 
+    const calculateRate = () => {
+        const gpuRate = (job?.resources?.gpu || 0) * 0.10
+        const cpuRate = (job?.resources?.cpu || 0) * 0.02
+        return gpuRate + cpuRate
+    }
+
     const calculateCost = () => {
         if (!job?.start_time) return '$0.00'
         const start = new Date(job.start_time)
         const end = job.end_time ? new Date(job.end_time) : new Date()
         const minutes = Math.ceil((end.getTime() - start.getTime()) / 60000)
 
-        const gpuCost = (job.resources?.gpu || 0) * minutes * 0.1
-        const cpuCost = (job.resources?.cpu || 0) * minutes * 0.02
-        const total = gpuCost + cpuCost
-
+        const total = calculateRate() * minutes
         return `$${total.toFixed(2)}`
     }
 
@@ -365,11 +368,11 @@ export default function JobDetailsModal({ jobId, onClose }: JobDetailsModalProps
                                 <p className="text-xl font-bold text-gray-900">{calculateDuration()}</p>
                             </div>
                             <div>
-                                <p className="text-sm text-gray-600">Rate</p>
-                                <p className="text-xl font-bold text-gray-900">$0.02/min</p>
+                                <p className="text-sm text-gray-600">Est. Rate</p>
+                                <p className="text-xl font-bold text-gray-900">${calculateRate().toFixed(2)}/min</p>
                             </div>
                             <div>
-                                <p className="text-sm text-gray-600">Total Cost</p>
+                                <p className="text-sm text-gray-600">Est. Cost</p>
                                 <p className="text-xl font-bold text-blue-600">{calculateCost()}</p>
                             </div>
                         </div>
