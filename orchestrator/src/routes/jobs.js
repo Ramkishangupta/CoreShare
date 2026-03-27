@@ -50,7 +50,7 @@ router.post('/',
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { dockerfile, resources } = req.body;
+    const { dockerfile, resources, preferredWorkerId } = req.body;
     const userId = req.user.userId;
 
     try {
@@ -61,21 +61,6 @@ router.post('/',
         return res.status(400).json({ error: validationError.message });
       }
 
-      // Check user credits
-      const userResult = await db.query(
-        'SELECT credits FROM users WHERE id = $1',
-        [userId]
-      );
-
-      if (userResult.rows.length === 0) {
-        return res.status(404).json({ error: 'User not found' });
-      }
-
-      const userCredits = parseFloat(userResult.rows[0].credits);
-      if (userCredits <= 0) {
-        return res.status(400).json({ error: 'Insufficient credits' });
-      }
-
       // Add job via JobScheduler
       const jobScheduler = req.app.locals.jobScheduler;
       const job = await jobScheduler.addJob({
@@ -84,7 +69,9 @@ router.post('/',
         resources: {
           gpu: resources.gpu || 0,
           cpu: resources.cpu || 1,
-          ram: resources.ram || 2
+          ram: resources.ram || 2,
+          gpuModel: resources.gpuModel,
+          preferredWorkerId: preferredWorkerId
         },
         priority: 0
       });
@@ -107,6 +94,7 @@ router.post('/',
 router.get('/', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const { status, limit = 50, offset = 0 } = req.query;
+  //check about can limit be updated
 
   try {
     let query;

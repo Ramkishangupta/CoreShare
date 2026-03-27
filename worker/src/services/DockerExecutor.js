@@ -315,8 +315,13 @@ class DockerExecutor {
         let output = '';
         let truncated = false;
 
-        stream.on('data', (chunk) => {
-          const data = chunk.toString().replace(/\u0000/g, '').replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F]/g, '');
+        // Proper demuxing of Docker stdout/stderr streams to avoid multiplex header corruption
+        const { PassThrough } = require('stream');
+        const logStream = new PassThrough();
+        container.modem.demuxStream(stream, logStream, logStream);
+
+        logStream.on('data', (chunk) => {
+          const data = chunk.toString();
 
           // Check if adding this chunk would exceed limit
           if (output.length + data.length > MAX_OUTPUT) {
@@ -336,12 +341,13 @@ class DockerExecutor {
         await container.start();
         logger.info(`Container started for job ${jobId}`);
 
-        // Add job timeout (1 hour max)
-        const MAX_JOB_DURATION = 3600000; // 1 hour in milliseconds
+        // Add job timeout
+        const MAX_JOB_DURATION = (resources.maxDurationMinutes || 60) * 60000; // dynamic or 1 hour max default
+        let timeoutId;
 
         const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => {
-            reject(new Error('Job exceeded maximum duration (1 hour)'));
+          timeoutId = setTimeout(() => {
+            reject(new Error(`Job exceeded maximum duration (${MAX_JOB_DURATION / 60000} minutes)`));
           }, MAX_JOB_DURATION);
         });
 
@@ -361,6 +367,11 @@ class DockerExecutor {
             throw err;
           }
           throw err;
+        }).finally(() => {
+          // IMPORTANT: Prevent unhandled promise rejection and memory leak by clearing timeout
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+          }
         });
 
         // Get exit code
@@ -390,9 +401,9 @@ class DockerExecutor {
     if (container) {
       try {
         await container.stop({ t: 10 }); // 10 second grace period
-        await container.remove({ force: true });
+        // Don't call container.remove() — AutoRemove handles cleanup after stop
         this.runningContainers.delete(jobId);
-        logger.info(`Job ${jobId} stopped and removed`);
+        logger.info(`Job ${jobId} stopped (AutoRemove will clean up container)`);
       } catch (error) {
         logger.error(`Failed to stop job ${jobId}:`, error);
         throw error;

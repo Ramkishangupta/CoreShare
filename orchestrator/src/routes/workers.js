@@ -31,7 +31,7 @@ router.get('/', authenticateToken, async (req, res) => {
           status: w.modes.gpu.available ? 'idle' : 'busy',
           pricing: {
             gpuPerMinute: w.pricing.gpuPerMinute,
-            cpuPerMinute: 0  // Included in GPU price
+            cpuPerMinute: 0  
           },
           availability: {
             currentJobs: w.modes.gpu.currentJobs?.length || 0,
@@ -80,7 +80,7 @@ router.get('/', authenticateToken, async (req, res) => {
             storage: w.specs.storage || 0
           },
           status: w.status,
-          pricing: w.pricing || getPricingForWorker(w),
+          pricing: w.pricing,
           availability: {
             currentJobs: w.currentJobs?.length || 0,
             maxJobs: 1,
@@ -112,25 +112,6 @@ router.get('/stats', authenticateToken, async (req, res) => {
   }
 });
 
-// Helper: Get pricing for a worker
-function getPricingForWorker(worker) {
-  const gpuModel = worker.specs?.gpuModel || '';
-  
-  // Get GPU price from env
-  let gpuPerMinute = 0;
-  if (gpuModel) {
-    const modelKey = gpuModel.replace(/\s+/g, '_').replace(/[^A-Z0-9_]/gi, '').toUpperCase();
-    const envKey = `GPU_PRICE_${modelKey}`;
-    gpuPerMinute = parseFloat(process.env[envKey] || process.env.GPU_PRICE_DEFAULT || 0.10);
-  }
-  
-  const cpuPerMinute = parseFloat(process.env.CPU_PRICE_PER_MINUTE || 0.02);
-  
-  return {
-    gpuPerMinute,
-    cpuPerMinute,
-    currency: 'USD'
-  };
-}
+
 
 module.exports = router;

@@ -8,7 +8,7 @@ const router = express.Router();
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const result = await db.query(
-      'SELECT id, email, name, credits, role, created_at FROM users WHERE id = $1',
+      'SELECT id, email, name, role, created_at FROM users WHERE id = $1',
       [req.user.userId]
     );
 
@@ -22,7 +22,6 @@ router.get('/profile', authenticateToken, async (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name,
-        credits: parseFloat(user.credits),
         role: user.role,
         createdAt: user.created_at
       }

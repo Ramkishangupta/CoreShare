@@ -1,4 +1,5 @@
 const winston = require('winston');
+require('winston-daily-rotate-file');
 const fs = require('fs');
 const path = require('path');
 
@@ -8,32 +9,52 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
+// Shared log format
+const logFormat = winston.format.combine(
+  winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+  winston.format.errors({ stack: true }),
+  winston.format.printf(({ timestamp, level, message, stack }) => {
+    if (stack) {
+      return `${timestamp} [${level.toUpperCase()}] ${message}\n${stack}`;
+    }
+    return `${timestamp} [${level.toUpperCase()}] ${message}`;
+  })
+);
+
+// Daily rotate transport for error logs
+const errorRotateTransport = new winston.transports.DailyRotateFile({
+  filename: path.join(logsDir, 'error-%DATE%.log'),
+  datePattern: 'YYYY-MM-DD',
+  level: 'error',
+  maxSize: '20m',
+  maxFiles: '14d',
+  zippedArchive: true
+});
+
+// Daily rotate transport for combined logs
+const combinedRotateTransport = new winston.transports.DailyRotateFile({
+  filename: path.join(logsDir, 'combined-%DATE%.log'),
+  datePattern: 'YYYY-MM-DD',
+  maxSize: '20m',
+  maxFiles: '14d',
+  zippedArchive: true
+});
+
+// Log rotation events
+errorRotateTransport.on('rotate', (oldFilename, newFilename) => {
+  logger.info(`Error log rotated: ${path.basename(oldFilename)} → ${path.basename(newFilename)}`);
+});
+
+combinedRotateTransport.on('rotate', (oldFilename, newFilename) => {
+  logger.info(`Combined log rotated: ${path.basename(oldFilename)} → ${path.basename(newFilename)}`);
+});
 
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
-  format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    winston.format.errors({ stack: true }),
-    winston.format.printf(({ timestamp, level, message, stack }) => {
-      // Clean, simple format for file logs
-      if (stack) {
-        return `${timestamp} [${level.toUpperCase()}] ${message}\n${stack}`;
-      }
-      return `${timestamp} [${level.toUpperCase()}] ${message}`;
-    })
-  ),
+  format: logFormat,
   transports: [
-    new winston.transports.File({ 
-      filename: 'logs/error.log', 
-      level: 'error',
-      maxsize: 5242880, // 5MB
-      maxFiles: 5
-    }),
-    new winston.transports.File({ 
-      filename: 'logs/combined.log',
-      maxsize: 5242880, // 5MB
-      maxFiles: 5
-    })
+    errorRotateTransport,
+    combinedRotateTransport
   ]
 });
 
