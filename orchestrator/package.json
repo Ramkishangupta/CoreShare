@@ -19,7 +19,8 @@
     "pg": "^8.11.3",
     "redis": "^4.6.7",
     "socket.io": "^4.6.1",
-    "winston": "^3.11.0"
+    "winston": "^3.11.0",
+    "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
