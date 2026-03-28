@@ -502,7 +502,7 @@ class DockerExecutor {
       // Get all images
       const images = await this.docker.listImages();
       const inUseImageIds = await this.getRunningContainerImageIds();
-      const retentionMinutes = this.config.imageRetentionMinutes || 60;
+      const retentionMinutes = this.config.imageRetentionMinutes ?? 60;
       const retentionThreshold = Date.now() - (retentionMinutes * 60 * 1000);
       let removedCount = 0;
       
