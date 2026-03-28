@@ -98,6 +98,7 @@ CREATE INDEX idx_jobs_user_id ON jobs(user_id);
 CREATE INDEX idx_jobs_worker_id ON jobs(worker_id);
 CREATE INDEX idx_billing_user_id ON billing(user_id);
 CREATE INDEX idx_billing_job_id ON billing(job_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_job_id_unique ON billing(job_id);
 CREATE INDEX idx_billing_cost ON billing(cost);
 CREATE INDEX idx_billing_created_at ON billing(created_at);
 CREATE INDEX idx_worker_api_keys_worker_id ON worker_api_keys(worker_id);

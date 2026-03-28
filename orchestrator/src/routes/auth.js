@@ -6,8 +6,48 @@ const db = require('../db');
 
 const router = express.Router();
 
+const authAttempts = new Map();
+
+function makeRateLimiter({ windowMs, maxAttempts, keyBuilder }) {
+  return (req, res, next) => {
+    const key = keyBuilder(req);
+    const now = Date.now();
+
+    const existing = authAttempts.get(key);
+    if (!existing || now > existing.resetAt) {
+      authAttempts.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    existing.count += 1;
+    if (existing.count > maxAttempts) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
+      res.set('Retry-After', String(retryAfterSeconds));
+      return res.status(429).json({ error: 'Too many attempts. Please try again later.' });
+    }
+
+    return next();
+  };
+}
+
+const registerRateLimit = makeRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  maxAttempts: 20,
+  keyBuilder: (req) => `register:${req.ip || 'unknown'}`
+});
+
+const loginRateLimit = makeRateLimiter({
+  windowMs: 10 * 60 * 1000,
+  maxAttempts: 10,
+  keyBuilder: (req) => {
+    const email = (req.body?.email || '').toLowerCase().trim();
+    return `login:${req.ip || 'unknown'}:${email || 'unknown'}`;
+  }
+});
+
 // Register
 router.post('/register',
+  registerRateLimit,
   [
     body('email').isEmail().normalizeEmail(),
     body('password').isLength({ min: 6 }),
@@ -37,7 +77,7 @@ router.post('/register',
 
       // Create user
       const result = await db.query(
-        'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, credits, role',
+        'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id, email, name, role',
         [email, passwordHash, name]
       );
 
@@ -55,7 +95,6 @@ router.post('/register',
           id: user.id,
           email: user.email,
           name: user.name,
-          credits: parseFloat(user.credits),
           role: user.role
         },
         token
@@ -69,6 +108,7 @@ router.post('/register',
 
 // Login
 router.post('/login',
+  loginRateLimit,
   [
     body('email').isEmail().normalizeEmail(),
     body('password').notEmpty()
@@ -83,7 +123,7 @@ router.post('/login',
 
     try {
       const result = await db.query(
-        'SELECT id, email, password_hash, name, credits, role FROM users WHERE email = $1',
+        'SELECT id, email, password_hash, name, role FROM users WHERE email = $1',
         [email]
       );
 
@@ -111,7 +151,6 @@ router.post('/login',
           id: user.id,
           email: user.email,
           name: user.name,
-          credits: parseFloat(user.credits),
           role: user.role
         },
         token

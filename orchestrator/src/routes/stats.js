@@ -35,31 +35,22 @@ router.get('/', authenticateToken, async (req, res) => {
         // Calculate success rate
         const successRate = totalJobs > 0 ? ((completedJobs / totalJobs) * 100).toFixed(1) : 0;
 
-        // Calculate total spent (simulate with job duration * rate)
+                // Calculate total spent from persisted billing records.
         const costResult = await db.query(
             `SELECT 
-        SUM(
-          EXTRACT(EPOCH FROM (COALESCE(end_time, NOW()) - start_time)) / 60 * 
-          ((resources_requested->>'cpu')::int * 0.02 + 
-           COALESCE((resources_requested->>'gpu')::int, 0) * 0.1)
-        ) as total_cost
-       FROM jobs 
-       WHERE user_id = $1 AND start_time IS NOT NULL`,
+                COALESCE(SUM(cost), 0) as total_cost
+             FROM billing
+             WHERE user_id = $1`,
             [userId]
         );
         const totalSpent = parseFloat(costResult.rows[0].total_cost || 0);
 
-        // Calculate this month's spending
+                // Calculate this month's spending from billing records.
         const monthCostResult = await db.query(
             `SELECT 
-        SUM(
-          EXTRACT(EPOCH FROM (COALESCE(end_time, NOW()) - start_time)) / 60 * 
-          ((resources_requested->>'cpu')::int * 0.02 + 
-           COALESCE((resources_requested->>'gpu')::int, 0) * 0.1)
-        ) as month_cost
-       FROM jobs 
+                COALESCE(SUM(cost), 0) as month_cost
+             FROM billing
        WHERE user_id = $1 
-         AND start_time IS NOT NULL
          AND created_at >= date_trunc('month', CURRENT_DATE)`,
             [userId]
         );

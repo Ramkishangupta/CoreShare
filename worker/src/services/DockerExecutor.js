@@ -5,8 +5,9 @@ const fs = require('fs').promises;
 const os = require('os');
 
 class DockerExecutor {
-  constructor(config = {}) {
+  constructor(config = {}, workerResources = {}) {
     this.config = config;
+    this.workerResources = workerResources;
 
     // Platform detection for Windows/Linux Docker socket
     const getDockerSocketPath = () => {
@@ -104,6 +105,8 @@ class DockerExecutor {
 
   async executeDockerfile(dockerfileContent, options) {
     const { jobId, resources, onLog } = options;
+    const imageName = `job-${jobId}:latest`;
+    let imageBuilt = false;
 
     // Validate resources before starting
     this.validateResources(resources, onLog);
@@ -113,20 +116,17 @@ class DockerExecutor {
     try {
       // Build image
       onLog && onLog('[BUILD] Building Docker image...\n');
-      const imageName = `job-${jobId}:latest`;
       await this.buildImage(buildContext, imageName, onLog);
+      imageBuilt = true;
 
       // Run container
       onLog && onLog('[RUN] Starting container...\n');
       const result = await this.runContainer(imageName, jobId, resources, onLog);
 
-      // Cleanup
-      await this.cleanup(imageName, buildContext);
-
       return result;
-    } catch (error) {
-      await this.cleanup(null, buildContext);
-      throw error;
+    } finally {
+      // Always clean build context and clean image if it was created.
+      await this.cleanup(imageBuilt ? imageName : null, buildContext);
     }
   }
 
@@ -218,7 +218,7 @@ class DockerExecutor {
       }
 
       // Check GPU model if specified in job
-      const workerGpuModel = this.config.resources?.gpuModel;
+      const workerGpuModel = this.workerResources?.gpuModel;
       const requestedGpuModel = resources.gpuModel;
       
       if (requestedGpuModel && requestedGpuModel.trim() !== '') {
@@ -252,7 +252,17 @@ class DockerExecutor {
         // Validate CPU request against system limits
         const systemInfo = await this.docker.info();
         const systemCPUs = systemInfo.NCPU || os.cpus().length;
-        let requestedCPUs = resources.cpu || this.config.cpuLimit || 1;
+        const requestedCPUsRaw = resources.cpu || this.config.cpuLimit || 1;
+        const configCPULimit = this.config.cpuLimit;
+        let requestedCPUs = requestedCPUsRaw;
+
+        // Enforce configured CPU limit if present.
+        if (configCPULimit && requestedCPUs > configCPULimit) {
+          const errorMsg = `Job ${jobId} requests ${requestedCPUs} CPUs but worker config limit is ${configCPULimit}. Capping to ${configCPULimit}.`;
+          logger.warn(`⚠️  ${errorMsg}`);
+          if (onLog) onLog(`[WARNING] ${errorMsg}\n`);
+          requestedCPUs = configCPULimit;
+        }
 
         if (requestedCPUs > systemCPUs) {
           const errorMsg = `Job ${jobId} requests ${requestedCPUs} CPUs but system only has ${systemCPUs} available. Capping to ${systemCPUs}.`;
@@ -261,15 +271,43 @@ class DockerExecutor {
           requestedCPUs = systemCPUs;
         }
 
+        // Memory limit resolution with hard caps: request <= config <= system.
+        const requestedMemoryBytes = this.parseMemory(resources.ram || this.config.memoryLimit || '512m');
+        const configMemoryBytes = this.config.memoryLimit
+          ? this.parseMemory(this.config.memoryLimit)
+          : requestedMemoryBytes;
+        const systemMemoryBytes = systemInfo.MemTotal || os.totalmem();
+        let effectiveMemoryBytes = Math.min(requestedMemoryBytes, configMemoryBytes, systemMemoryBytes);
+        effectiveMemoryBytes = Math.max(effectiveMemoryBytes, 6 * 1024 * 1024);
+
+        if (requestedMemoryBytes > effectiveMemoryBytes) {
+          const requestedMb = Math.floor(requestedMemoryBytes / (1024 * 1024));
+          const effectiveMb = Math.floor(effectiveMemoryBytes / (1024 * 1024));
+          const errorMsg = `Job ${jobId} requests ${requestedMb}MB memory but effective limit is ${effectiveMb}MB. Capping to ${effectiveMb}MB.`;
+          logger.warn(`⚠️  ${errorMsg}`);
+          if (onLog) onLog(`[WARNING] ${errorMsg}\n`);
+        }
+
+        const readonlyRootfs = this.config.readonlyRootfs !== undefined
+          ? this.config.readonlyRootfs
+          : true;
+        const capAdd = Array.isArray(this.config.capAdd)
+          ? this.config.capAdd
+          : [];
+
         // Container configuration
         const containerConfig = {
           Image: imageName,
           name: `job-${jobId}`,
           HostConfig: {
-            Memory: this.parseMemory(resources.ram || this.config.memoryLimit),
+            Memory: effectiveMemoryBytes,
             NanoCpus: requestedCPUs * 1e9,  // Using validated CPU count
             NetworkMode: this.config.networkMode || 'none',
             AutoRemove: true,
+            Tmpfs: {
+              '/tmp': 'rw,noexec,nosuid,size=256m',
+              '/var/tmp': 'rw,noexec,nosuid,size=128m'
+            },
 
             // GPU allocation (if requested and available)
             ...(resources.gpu && resources.gpu > 0 && this.hasGpuSupport && {
@@ -283,9 +321,9 @@ class DockerExecutor {
 
             // Additional security constraints
             SecurityOpt: ['no-new-privileges:true'],
-            ReadonlyRootfs: false, // Set to true for extra security if app allows
+            ReadonlyRootfs: readonlyRootfs,
             CapDrop: ['ALL'],
-            CapAdd: ['CHOWN', 'SETUID', 'SETGID'] // Minimal capabilities
+            CapAdd: capAdd
           },
 
           // Environment variables for GPU (if applicable)
@@ -385,6 +423,12 @@ class DockerExecutor {
         resolve({
           exitCode,
           output,
+          effectiveResources: {
+            cpu: requestedCPUs,
+            ram: Math.max(1, Math.floor(effectiveMemoryBytes / (1024 ** 3))),
+            gpu: resources.gpu || 0,
+            gpuModel: resources.gpuModel || null
+          },
           truncated // Include truncation flag
         });
 
@@ -420,7 +464,8 @@ class DockerExecutor {
       while (attempts < maxAttempts) {
         try {
           const image = this.docker.getImage(imageName);
-          await image.remove({ force: true });
+          // Do not force removal to avoid deleting images in use by a running container.
+          await image.remove();
           logger.info(`✓ Image ${imageName} removed successfully`);
           break;
         } catch (error) {
@@ -456,7 +501,9 @@ class DockerExecutor {
       
       // Get all images
       const images = await this.docker.listImages();
-      const oneHourAgo = Date.now() - (60 * 60 * 1000);
+      const inUseImageIds = await this.getRunningContainerImageIds();
+      const retentionMinutes = this.config.imageRetentionMinutes || 60;
+      const retentionThreshold = Date.now() - (retentionMinutes * 60 * 1000);
       let removedCount = 0;
       
       // Remove old job-* images
@@ -464,12 +511,17 @@ class DockerExecutor {
         const tags = imageInfo.RepoTags || [];
         const createdMs = imageInfo.Created * 1000;
         
-        // Check if this is a job image and older than 1 hour
+        // Check if this is a job image and older than configured retention period
         const isJobImage = tags.some(tag => tag.startsWith('job-'));
-        if (isJobImage && createdMs < oneHourAgo) {
+        if (isJobImage && createdMs < retentionThreshold) {
+          if (inUseImageIds.has(imageInfo.Id)) {
+            logger.debug(`Skipping in-use image: ${tags[0] || imageInfo.Id.substring(0, 12)}`);
+            continue;
+          }
+
           try {
             const image = this.docker.getImage(imageInfo.Id);
-            await image.remove({ force: true });
+            await image.remove();
             logger.info(`Pruned old image: ${tags[0] || imageInfo.Id.substring(0, 12)}`);
             removedCount++;
           } catch (error) {
@@ -513,6 +565,7 @@ class DockerExecutor {
       logger.info('Running startup cleanup for leftover job images...');
       
       const images = await this.docker.listImages();
+      const inUseImageIds = await this.getRunningContainerImageIds();
       let removedCount = 0;
       
       for (const imageInfo of images) {
@@ -521,9 +574,14 @@ class DockerExecutor {
         // Check if this is a job image
         const isJobImage = tags.some(tag => tag.startsWith('job-'));
         if (isJobImage) {
+          if (inUseImageIds.has(imageInfo.Id)) {
+            logger.debug(`Skipping in-use image on startup: ${tags[0] || imageInfo.Id.substring(0, 12)}`);
+            continue;
+          }
+
           try {
             const image = this.docker.getImage(imageInfo.Id);
-            await image.remove({ force: true });
+            await image.remove();
             logger.info(`Removed leftover image: ${tags[0] || imageInfo.Id.substring(0, 12)}`);
             removedCount++;
           } catch (error) {
@@ -562,6 +620,20 @@ class DockerExecutor {
     logger.info(`Memory limit: ${memoryStr} = ${bytes} bytes`);
     // Enforce minimum 6MB required by Docker
     return Math.max(bytes, 6 * 1024 * 1024);
+  }
+
+  async getRunningContainerImageIds() {
+    try {
+      const runningContainers = await this.docker.listContainers({ all: false });
+      return new Set(
+        runningContainers
+          .map(container => container.ImageID)
+          .filter(Boolean)
+      );
+    } catch (error) {
+      logger.warn('Failed to query running containers for cleanup safety:', error.message);
+      return new Set();
+    }
   }
 }
 

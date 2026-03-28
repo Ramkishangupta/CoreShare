@@ -1,0 +1,27 @@
+{
+  "orchestratorUrl": "http://localhost:3000",
+  "workerId": "worker-desktop-ajeg1ku",
+  "workerToken": "worker-token-change-this-to-something-secure",
+  "resources": {
+    "type": "GPU",
+    "gpuModel": "NVIDIA GeForce RTX 3050 Laptop GPU",
+    "gpuCount": 1,
+    "cpuCores": 8,
+    "ram": 10,
+    "storage": 100
+  },
+  "pricing": {
+    "gpuPerMinute": 0.1,
+    "cpuPerMinute": 0.02
+  },
+  "docker": {
+    "socketPath": "//./pipe/docker_engine",
+    "maxConcurrentJobs": 1,
+    "defaultTimeout": 3600000,
+    "networkMode": "none",
+    "memoryLimit": "10g",
+    "cpuLimit": 8
+  },
+  "heartbeatInterval": 30000,
+  "logLevel": "info"
+}

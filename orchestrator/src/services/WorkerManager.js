@@ -5,9 +5,23 @@ class WorkerManager {
     this.io = io;
     this.workers = new Map(); // socketId -> worker data
     this.workersByWorkerId = new Map(); // workerId -> worker data
+    this.heartbeatMonitor = null;
     
     // Start heartbeat monitor
     this.startHeartbeatMonitor();
+  }
+
+  normalizePricing(pricing = {}) {
+    const parseRate = (value, fallback) => {
+      const rate = Number(value);
+      if (!Number.isFinite(rate) || rate < 0 || rate > 10) return fallback;
+      return rate;
+    };
+
+    return {
+      gpuPerMinute: parseRate(pricing.gpuPerMinute, 0.10),
+      cpuPerMinute: parseRate(pricing.cpuPerMinute, 0.02)
+    };
   }
 
   async registerWorker(socket, workerData) {
@@ -30,10 +44,7 @@ class WorkerManager {
       socketId: socket.id,
       type,
       specs,
-      pricing: pricing || {
-        gpuPerMinute: 0.10,
-        cpuPerMinute: 0.02
-      },
+      pricing: this.normalizePricing(pricing),
       status: 'idle',
       currentJobs: [],
       lastHeartbeat: Date.now(),
@@ -110,7 +121,7 @@ class WorkerManager {
   }
 
   startHeartbeatMonitor() {
-    setInterval(() => {
+    this.heartbeatMonitor = setInterval(() => {
       const now = Date.now();
       const timeout = 120000; // 2 minutes
 
@@ -121,6 +132,26 @@ class WorkerManager {
         }
       });
     }, 30000); // Check every 30 seconds
+  }
+
+  stop() {
+    if (this.heartbeatMonitor) {
+      clearInterval(this.heartbeatMonitor);
+      this.heartbeatMonitor = null;
+    }
+  }
+
+  isRegisteredSocket(socketId) {
+    return this.workers.has(socketId);
+  }
+
+  getWorkerBySocketId(socketId) {
+    return this.workers.get(socketId) || null;
+  }
+
+  isSocketBoundToWorker(socketId, workerId) {
+    const worker = this.getWorkerBySocketId(socketId);
+    return !!worker && worker.workerId === workerId;
   }
 
   findAvailableWorker(requirements) {

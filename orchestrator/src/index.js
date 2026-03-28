@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
 const logger = require('./utils/logger');
 const db = require('./db');
 
@@ -76,6 +77,28 @@ app.get('/health', (req, res) => {
 io.on('connection', (socket) => {
   logger.info(`Client connected: ${socket.id}`);
 
+  // Optional frontend socket authentication (workers authenticate via worker:register token).
+  const socketToken = socket.handshake?.auth?.token;
+  if (socketToken) {
+    try {
+      const decoded = jwt.verify(socketToken, process.env.JWT_SECRET);
+      if (decoded?.userId) {
+        socket.data.userId = decoded.userId;
+        socket.join(`user:${decoded.userId}`);
+      }
+    } catch (err) {
+      logger.warn(`Socket ${socket.id} provided invalid JWT token`);
+    }
+  }
+
+  const emitToJobOwner = async (jobId, eventName, payload) => {
+    const result = await db.query('SELECT user_id FROM jobs WHERE id = $1', [jobId]);
+    const ownerId = result.rows[0]?.user_id;
+    if (ownerId) {
+      io.to(`user:${ownerId}`).emit(eventName, payload);
+    }
+  };
+
   // Worker connection
   socket.on('worker:register', async (data) => {
     try {
@@ -88,15 +111,36 @@ io.on('connection', (socket) => {
 
   // Worker heartbeat
   socket.on('worker:heartbeat', (data) => {
+    if (!workerManager.isRegisteredSocket(socket.id)) {
+      logger.warn(`Ignoring heartbeat from unregistered socket ${socket.id}`);
+      return;
+    }
     workerManager.updateHeartbeat(socket.id, data);
   });
 
   // Job status updates from worker
   socket.on('job:status', async (data) => {
     try {
-      await jobScheduler.updateJobStatus(data);
-      // Broadcast to user clients
-      io.emit(`job:${data.jobId}:status`, data);
+      if (!workerManager.isRegisteredSocket(socket.id)) {
+        logger.warn(`Ignoring job:status from unregistered socket ${socket.id}`);
+        return;
+      }
+
+      const socketWorker = workerManager.getWorkerBySocketId(socket.id);
+      if (!socketWorker) {
+        logger.warn(`Ignoring job:status from unknown worker socket ${socket.id}`);
+        return;
+      }
+
+      const accepted = await jobScheduler.canAcceptWorkerEvent(data.jobId, socketWorker.workerId, false);
+      if (!accepted) {
+        logger.warn(`Ignoring job:status for job ${data.jobId} from non-assigned worker ${socketWorker.workerId}`);
+        return;
+      }
+
+      const payload = { ...data, workerId: socketWorker.workerId };
+      await jobScheduler.updateJobStatus(payload);
+      await emitToJobOwner(payload.jobId, `job:${payload.jobId}:status`, payload);
     } catch (error) {
       logger.error('Job status update failed:', error);
     }
@@ -105,10 +149,33 @@ io.on('connection', (socket) => {
   // Job completion from worker
   socket.on('job:complete', async (data) => {
     try {
-      logger.info(`Received job:complete event for job ${data.jobId}`);
-      await jobScheduler.handleJobCompletion(data);
-      io.emit(`job:${data.jobId}:complete`, data);
-      logger.info(`Emitted job:${data.jobId}:complete to all connected clients`);
+      if (!workerManager.isRegisteredSocket(socket.id)) {
+        logger.warn(`Ignoring job:complete from unregistered socket ${socket.id}`);
+        return;
+      }
+
+      const socketWorker = workerManager.getWorkerBySocketId(socket.id);
+      if (!socketWorker) {
+        logger.warn(`Ignoring job:complete from unknown worker socket ${socket.id}`);
+        return;
+      }
+
+      if (data.workerId && !workerManager.isSocketBoundToWorker(socket.id, data.workerId)) {
+        logger.warn(`Ignoring job:complete for job ${data.jobId}: payload workerId mismatch for socket ${socket.id}`);
+        return;
+      }
+
+      const eventPayload = { ...data, workerId: socketWorker.workerId };
+      const accepted = await jobScheduler.canAcceptWorkerEvent(eventPayload.jobId, socketWorker.workerId, false);
+      if (!accepted) {
+        logger.warn(`Ignoring job:complete for job ${eventPayload.jobId} from non-assigned worker ${socketWorker.workerId}`);
+        return;
+      }
+
+      logger.info(`Received job:complete event for job ${eventPayload.jobId}`);
+      await jobScheduler.handleJobCompletion(eventPayload);
+      await emitToJobOwner(eventPayload.jobId, `job:${eventPayload.jobId}:complete`, eventPayload);
+      logger.info(`Emitted job:${eventPayload.jobId}:complete to owner room`);
     } catch (error) {
       logger.error('Job completion handling failed:', error);
     }

@@ -20,6 +20,11 @@ interface JobDetails {
     logs: string
     result: any
     error_message: string
+    billingCost?: number | null
+    pricing?: {
+        gpuPerMinute: number
+        cpuPerMinute: number
+    } | null
     created_at: string
     start_time: string
     end_time: string
@@ -55,6 +60,8 @@ export default function JobDetailsModal({ jobId, onClose }: JobDetailsModalProps
                     created_at: jobData.created_at || jobData.createdAt,
                     start_time: jobData.start_time || jobData.startTime,
                     end_time: jobData.end_time || jobData.endTime,
+                    billingCost: jobData.billingCost ?? null,
+                    pricing: jobData.pricing ?? null,
                     resources: jobData.resources || jobData.resources_requested || { cpu: 0, ram: 0, gpu: 0 }
                 }
 
@@ -87,6 +94,8 @@ export default function JobDetailsModal({ jobId, onClose }: JobDetailsModalProps
                     created_at: jobData.created_at || jobData.createdAt,
                     start_time: jobData.start_time || jobData.startTime,
                     end_time: jobData.end_time || jobData.endTime,
+                    billingCost: jobData.billingCost ?? null,
+                    pricing: jobData.pricing ?? null,
                     resources: jobData.resources || jobData.resources_requested || { cpu: 0, ram: 0, gpu: 0 }
                 }
 
@@ -103,7 +112,12 @@ export default function JobDetailsModal({ jobId, onClose }: JobDetailsModalProps
     // Socket.io for real-time logs
     useEffect(() => {
         const orchestratorUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3000'
-        socketRef.current = io(orchestratorUrl)
+        const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+        socketRef.current = io(orchestratorUrl, {
+            auth: {
+                token
+            }
+        })
 
         // Listen for job status updates
         socketRef.current.on(`job:${jobId}:status`, (data: any) => {
@@ -170,12 +184,18 @@ export default function JobDetailsModal({ jobId, onClose }: JobDetailsModalProps
     }
 
     const calculateRate = () => {
-        const gpuRate = (job?.resources?.gpu || 0) * 0.10
-        const cpuRate = (job?.resources?.cpu || 0) * 0.02
+        const gpuUnit = job?.pricing?.gpuPerMinute ?? 0.10
+        const cpuUnit = job?.pricing?.cpuPerMinute ?? 0.02
+        const gpuRate = (job?.resources?.gpu || 0) * gpuUnit
+        const cpuRate = (job?.resources?.cpu || 0) * cpuUnit
         return gpuRate + cpuRate
     }
 
     const calculateCost = () => {
+        if (typeof job?.billingCost === 'number') {
+            return `$${job.billingCost.toFixed(2)}`
+        }
+
         if (!job?.start_time) return '$0.00'
         const start = new Date(job.start_time)
         const end = job.end_time ? new Date(job.end_time) : new Date()
@@ -205,6 +225,8 @@ export default function JobDetailsModal({ jobId, onClose }: JobDetailsModalProps
                 created_at: jobData.created_at || jobData.createdAt,
                 start_time: jobData.start_time || jobData.startTime,
                 end_time: jobData.end_time || jobData.endTime,
+                billingCost: jobData.billingCost ?? null,
+                pricing: jobData.pricing ?? null,
                 resources: jobData.resources || jobData.resources_requested || { cpu: 0, ram: 0, gpu: 0 }
             }
             setJob(normalized)

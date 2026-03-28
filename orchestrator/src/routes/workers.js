@@ -13,7 +13,12 @@ router.get('/', authenticateToken, async (req, res) => {
     const workerList = [];
     
     workers.forEach(w => {
-      if (w.type === 'HYBRID') {
+      const hasValidHybridModes = !!(
+        w?.modes?.gpu?.specs &&
+        w?.modes?.cpu
+      );
+
+      if (w.type === 'HYBRID' && hasValidHybridModes) {
         // HYBRID worker - create TWO entries
         
         // GPU Mode Entry

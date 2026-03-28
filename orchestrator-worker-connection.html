@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orchestrator-Worker Connection Analysis</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --secondary: #475569;
+            --bg: #f8fafc;
+            --card: #ffffff;
+            --text: #1e293b;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: var(--bg);
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        h1, h2, h3 {
+            color: var(--text);
+            font-weight: 700;
+        }
+
+        h1 {
+            border-bottom: 3px solid var(--primary);
+            padding-bottom: 0.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: 8px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            padding: 2rem;
+            margin-bottom: 2rem;
+            border: 1px solid #e2e8f0;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-right: 0.5rem;
+        }
+
+        .badge-socket { background: #e0e7ff; color: #4338ca; }
+        .badge-event { background: #dcfce7; color: #15803d; }
+        .badge-flow { background: #fae8ff; color: #86198f; }
+
+        code {
+            background: #f1f5f9;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.9em;
+            color: #ef4444;
+        }
+
+        .diagram-container {
+            background: white;
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            display: flex;
+            justify-content: center;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        th {
+            background: #f8fafc;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <h1>Orchestrator-Worker I/O Connection Analysis</h1>
+
+    <div class="card">
+        <h2>1. Connection Architecture Overview</h2>
+        <p>The system uses a <strong>Client-Server architecture</strong> where the <strong>Orchestrator acts as the WebSocket Server</strong> and each <strong>Worker acts as a Client</strong>. The communication is persistent, real-time, and bi-directional, enabled by the <span class="badge badge-socket">Socket.IO</span> library.</p>
+        
+        <div class="diagram-container">
+            <pre class="mermaid">
+            graph LR
+                O["Orchestrator Server"]
+                W1["Worker 1 (GPU)"]
+                W2["Worker 2 (CPU)"]
+                W3["Worker 3 (Hybrid)"]
+                
+                W1 -- "Socket.IO Connection" --> O
+                W2 -- "Socket.IO Connection" --> O
+                W3 -- "Socket.IO Connection" --> O
+                
+                style O fill:#2563eb,color:white
+                style W1 fill:#fff,stroke:#2563eb
+                style W2 fill:#fff,stroke:#2563eb
+                style W3 fill:#fff,stroke:#2563eb
+            </pre>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>2. Use of Socket Protocol & Logic</h2>
+        <p>The connection relies on the <strong>WebSocket protocol</strong>, wrapped by Socket.IO for reliability (auto-reconnection, packet buffering). This ensures that if a network glitch occurs, the worker automatically attempts to reconnect (`MaxReconnectAttempts: 10`).</p>
+        
+        <h3>Key Protocol Features in this System:</h3>
+        <ul>
+            <li><strong>Authentication:</strong> Connection handshake includes an <code>auth</code> object with a secret token (<code>WORKER_SECRET_TOKEN</code>).</li>
+            <li><strong>Event-Driven:</strong> Communication is message-based, not request-response. Events like <code>job:new</code> or <code>job:status</code> can be sent at any time.</li>
+            <li><strong>Heartbeat Mechanism:</strong> Application-level ping to track worker health/load (every 30s).</li>
+            <li><strong>Namespaces:</strong> All workers connect to the default root namespace <code>/</code>.</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>3. Complete Connection Flow</h2>
+        <h3>Phase 1: Connection & Registration</h3>
+        <p>When a worker starts, it initiates a connection. Once connected, it must "register" to identify its capabilities (CPU/GPU specs).</p>
+        
+        <div class="diagram-container">
+            <pre class="mermaid">
+            sequenceDiagram
+                participant W as Worker Client
+                participant O as Orchestrator Server
+                participant DB as Database
+
+                Note over W: Worker Starts
+                W->>O: Connect (Handshake + Auth Token)
+                
+                alt Invalid Token
+                    O-->>W: Connection Error / Disconnect
+                else Valid Token
+                    O-->>W: emit 'connect'
+                    
+                    Note over W: On 'connect'
+                    W->>O: "emit 'worker:register' { workerId, specs, type }"
+                    
+                    O->>O: Validate Specs & Pricing
+                    O->>DB: UPSERT Worker Record
+                    O->>O: Add to Memory Map
+                    
+                    O-->>W: "emit 'registered' { success: true }"
+                    W-->>W: Log Registration Confirmed
+                end
+            </pre>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Phase 2: Job Execution & Logs</h3>
+        <p>The core business logic. The orchestrator pushes jobs to workers, and workers stream back logs and status updates.</p>
+
+        <div class="diagram-container">
+            <pre class="mermaid">
+            sequenceDiagram
+                participant O as Orchestrator
+                participant W as Worker
+                participant D as Docker (on Worker)
+
+                O->>O: Scheduler selects Worker
+                O->>W: "emit 'job:new' { jobId, dockerfile, resources }"
+                
+                W->>W: Check availability
+                W->>O: "emit 'job:status' { status: 'running' }"
+                
+                W->>D: Build & Run Container
+                
+                loop Log Streaming
+                    D-->>W: "Container Log Output"
+                    W->>O: "emit 'job:status' { status: 'running', logs: '...' }"
+                end
+                
+                alt Success
+                    D-->>W: Exit Code 0
+                    W->>O: "emit 'job:complete' { success: true, result: output }"
+                else Failure
+                    D-->>W: Exit Code 1 / Error
+                    W->>O: "emit 'job:complete' { success: false, error: msg }"
+                end
+                
+                O->>O: Update Job DB / Release Worker
+            </pre>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Phase 3: Health Monitoring (Heartbeat)</h3>
+        <p>To ensure system stability, workers report their resource usage every 30 seconds. If a worker misses heartbeats for >2 minutes, it is marked offline.</p>
+
+        <div class="diagram-container">
+            <pre class="mermaid">
+            sequenceDiagram
+                participant W as Worker
+                participant O as Orchestrator
+
+                loop Every 30 Seconds
+                    W->>W: Collect Metrics (CPU/RAM/GPU)
+                    W->>O: "emit 'worker:heartbeat' { metrics }"
+                    
+                    O->>O: Update LastSeen Timestamp
+                    
+                    opt Every 5 Minutes
+                        O->>DB: Persist Heartbeat to DB
+                    end
+                end
+
+                Note over O: Monitor Loop (Every 30s)
+                O->>O: Check LastSeen > 2 mins?
+                opt Timeout Detected
+                    O->>O: Mark Worker Offline
+                    O->>DB: Update Status = 'offline'
+                end
+            </pre>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>4. Event Dictionary</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Event Name</th>
+                    <th>Direction</th>
+                    <th>Payload</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>worker:register</code></td>
+                    <td>Worker -> Orch</td>
+                    <td><code>{ workerId, type, specs, token }</code></td>
+                    <td>Initial identification after connection.</td>
+                </tr>
+                <tr>
+                    <td><code>worker:heartbeat</code></td>
+                    <td>Worker -> Orch</td>
+                    <td><code>{ metrics: { cpu, ram... } }</code></td>
+                    <td>Periodic health and load report.</td>
+                </tr>
+                <tr>
+                    <td><code>job:new</code></td>
+                    <td>Orch -> Worker</td>
+                    <td><code>{ jobId, dockerfile, resources }</code></td>
+                    <td>Instruction to execute a new job.</td>
+                </tr>
+                <tr>
+                    <td><code>job:status</code></td>
+                    <td>Worker -> Orch</td>
+                    <td><code>{ jobId, status, logs }</code></td>
+                    <td>Real-time updates and log streaming.</td>
+                </tr>
+                <tr>
+                    <td><code>job:complete</code></td>
+                    <td>Worker -> Orch</td>
+                    <td><code>{ jobId, success, result/error }</code></td>
+                    <td>Final job outcome report.</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+    </script>
+</body>
+</html>

@@ -78,9 +78,21 @@ class JobScheduler {
           `UPDATE jobs 
            SET status = 'running', 
                worker_id = (SELECT id FROM workers WHERE worker_id = $1),
+               resources_requested = resources_requested || jsonb_build_object(
+                 'assignedWorkerId', $1,
+                 'pricingSnapshot', jsonb_build_object(
+                   'gpuPerMinute', $3,
+                   'cpuPerMinute', $4
+                 )
+               ),
                start_time = NOW()
            WHERE id = $2`,
-          [worker.workerId, jobData.id]
+          [
+            worker.workerId,
+            jobData.id,
+            worker.pricing?.gpuPerMinute ?? this.getGPUPrice(jobData.resources_requested?.gpuModel),
+            worker.pricing?.cpuPerMinute ?? this.getCPUPrice()
+          ]
         );
       } catch (dbError) {
         // Assignment already accepted by worker; try to cancel remote run and unlock worker.
@@ -99,6 +111,19 @@ class JobScheduler {
 
     this.jobQueue.on('failed', (job, err) => {
       logger.error(`Job ${job.data.id} failed:`, err.message);
+
+      const attemptsAllowed = job?.opts?.attempts || 1;
+      if (job.attemptsMade >= attemptsAllowed) {
+        db.query(
+          `UPDATE jobs
+           SET status = 'failed',
+               end_time = NOW(),
+               error_message = $2
+           WHERE id = $1
+             AND status IN ('queued', 'running')`,
+          [job.data.id, err.message || 'Dispatch failed']
+        ).catch(updateErr => logger.error(`Failed to mark job ${job.data.id} as failed:`, updateErr));
+      }
     });
   }
 
@@ -143,15 +168,18 @@ class JobScheduler {
   async updateJobStatus(data) {
     const { jobId, status, logs, metrics } = data;
 
+    // Workers may only report non-terminal running updates; terminal states come from completion flow.
+    const normalizedStatus = status === 'running' ? 'running' : null;
+
     // Don't update status if job is already in a terminal state
     // This prevents race conditions where late status updates overwrite completion
     await db.query(
       `UPDATE jobs 
-       SET status = $1, 
+       SET status = COALESCE($1, status), 
            logs = COALESCE(logs, '') || $2,
            updated_at = NOW()
        WHERE id = $3 AND status NOT IN ('completed', 'failed', 'cancelled')`,
-      [status, this.sanitizeText(logs) || '', jobId]
+      [normalizedStatus, this.sanitizeText(logs) || '', jobId]
     );
 
     logger.debug(`Job ${jobId} status update attempted with status ${status}`);
@@ -204,11 +232,21 @@ class JobScheduler {
           logger.warn(`Abnormally long job duration: ${durationMinutes} minutes for job ${jobId}`);
         }
 
-        const resources = job.resources_requested;
+        const requestedResources = job.resources_requested || {};
+        const effectiveResources = result?.effectiveResources || null;
+        const resources = effectiveResources
+          ? {
+              ...requestedResources,
+              ...effectiveResources
+            }
+          : requestedResources;
         
-        // Get worker pricing (use worker's rates if available, otherwise fallback)
+        // Pricing resolution order: immutable pricing snapshot -> worker runtime pricing -> env fallback.
+        const pricingSnapshot = resources.pricingSnapshot || {};
         const worker = this.workerManager.getWorkerByWorkerId(workerId);
-        const pricing = worker?.pricing || {};
+        const pricing = Object.keys(pricingSnapshot).length > 0
+          ? pricingSnapshot
+          : (worker?.pricing || {});
         
         // Calculate GPU cost
         let gpuCost = 0;
@@ -245,7 +283,8 @@ class JobScheduler {
         if (existingBilling.rowCount === 0) {
           await client.query(
             `INSERT INTO billing (user_id, job_id, cost, duration_minutes, resources_used)
-             VALUES ($1, $2, $3, $4, $5)`,
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (job_id) DO NOTHING`,
             [job.user_id, jobId, totalCost, durationMinutes, JSON.stringify(resources)]
           );
 
@@ -270,6 +309,18 @@ class JobScheduler {
   }
 
   async cancelJob(jobId) {
+    const currentJob = await db.query(
+      `SELECT j.status, w.worker_id AS assigned_worker_id
+       FROM jobs j
+       LEFT JOIN workers w ON j.worker_id = w.id
+       WHERE j.id = $1`,
+      [jobId]
+    );
+
+    if (currentJob.rows[0]?.status === 'running' && currentJob.rows[0]?.assigned_worker_id) {
+      this.workerManager.cancelJobOnWorker(currentJob.rows[0].assigned_worker_id, jobId);
+    }
+
     await db.query(
       `UPDATE jobs SET status = 'cancelled', end_time = NOW() WHERE id = $1`,
       [jobId]
@@ -283,6 +334,31 @@ class JobScheduler {
     }
 
     logger.info(`Job ${jobId} cancelled`);
+  }
+
+  async canAcceptWorkerEvent(jobId, workerId, allowUnassigned = false) {
+    const result = await db.query(
+      `SELECT status, resources_requested->>'assignedWorkerId' AS assigned_worker_id
+       FROM jobs
+       WHERE id = $1`,
+      [jobId]
+    );
+
+    if (result.rowCount === 0) {
+      return false;
+    }
+
+    const jobStatus = result.rows[0]?.status;
+    if (['completed', 'failed', 'cancelled'].includes(jobStatus)) {
+      return false;
+    }
+
+    const assignedWorkerId = result.rows[0]?.assigned_worker_id || null;
+    if (!assignedWorkerId) {
+      return allowUnassigned && jobStatus === 'queued';
+    }
+
+    return assignedWorkerId === workerId;
   }
 
   async getQueueStatus() {

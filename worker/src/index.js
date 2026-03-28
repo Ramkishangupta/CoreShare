@@ -26,7 +26,7 @@ class WorkerAgent {
     logger.info(`Network mode: ${this.config.docker.networkMode}`);
 
     this.socket = null;
-    this.dockerExecutor = new DockerExecutor(this.config.docker);
+    this.dockerExecutor = new DockerExecutor(this.config.docker, this.config.resources);
     this.resourceMonitor = new ResourceMonitor();
     this.currentJobs = new Map();
     this.reconnectAttempts = 0;
@@ -219,7 +219,8 @@ class WorkerAgent {
         success: true,
         result: {
           exitCode: result.exitCode,
-          output: result.output
+          output: result.output,
+          effectiveResources: result.effectiveResources
         }
       });
 

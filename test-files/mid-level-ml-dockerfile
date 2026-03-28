@@ -1,0 +1,119 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Keep dependencies small but realistic for a medium ML workload.
+RUN pip install --no-cache-dir numpy==1.26.4 pandas==2.2.2 scikit-learn==1.5.1
+
+RUN cat > /app/train.py <<'PY'
+import json
+import os
+import time
+
+import numpy as np
+from sklearn.compose import ColumnTransformer
+from sklearn.datasets import make_classification
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+
+def main():
+    start = time.time()
+    print('=== Medium ML Job: Tabular Classification Pipeline ===', flush=True)
+
+    # Generate synthetic but non-trivial tabular data.
+    x_num, y = make_classification(
+        n_samples=60000,
+        n_features=40,
+        n_informative=18,
+        n_redundant=8,
+        n_clusters_per_class=2,
+        class_sep=1.0,
+        random_state=42,
+    )
+
+    # Create a small categorical branch to simulate mixed feature types.
+    rng = np.random.default_rng(42)
+    cat1 = rng.integers(0, 8, size=(x_num.shape[0], 1)).astype(str)
+    cat2 = rng.choice(['low', 'mid', 'high', 'vip'], size=(x_num.shape[0], 1))
+
+    x = np.concatenate([x_num, cat1, cat2], axis=1)
+
+    num_cols = list(range(40))
+    cat_cols = [40, 41]
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                'num',
+                Pipeline([
+                    ('imputer', SimpleImputer(strategy='median')),
+                    ('scaler', StandardScaler()),
+                ]),
+                num_cols,
+            ),
+            (
+                'cat',
+                Pipeline([
+                    ('imputer', SimpleImputer(strategy='most_frequent')),
+                    ('onehot', OneHotEncoder(handle_unknown='ignore')),
+                ]),
+                cat_cols,
+            ),
+        ]
+    )
+
+    model = Pipeline([
+        ('prep', preprocessor),
+        ('clf', LogisticRegression(max_iter=300, n_jobs=1, solver='lbfgs')),
+    ])
+
+    x_train, x_test, y_train, y_test = train_test_split(
+        x, y, test_size=0.2, random_state=42, stratify=y
+    )
+
+    print(f'Train samples: {x_train.shape[0]}, Test samples: {x_test.shape[0]}', flush=True)
+    print('Training model...', flush=True)
+
+    fit_start = time.time()
+    model.fit(x_train, y_train)
+    fit_time = time.time() - fit_start
+
+    print('Evaluating model...', flush=True)
+    y_pred = model.predict(x_test)
+    y_prob = model.predict_proba(x_test)[:, 1]
+
+    acc = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, y_prob)
+
+    report = classification_report(y_test, y_pred, output_dict=True)
+
+    summary = {
+        'accuracy': round(float(acc), 4),
+        'roc_auc': round(float(auc), 4),
+        'fit_time_seconds': round(float(fit_time), 2),
+        'total_runtime_seconds': round(float(time.time() - start), 2),
+        'samples_train': int(x_train.shape[0]),
+        'samples_test': int(x_test.shape[0]),
+        'classification_report_macro_avg': {
+            k: round(float(v), 4) for k, v in report['macro avg'].items()
+        },
+    }
+
+    print('=== RESULT SUMMARY ===', flush=True)
+    print(json.dumps(summary, indent=2), flush=True)
+
+    # Exit non-zero if quality is unexpectedly poor.
+    if summary['accuracy'] < 0.75 or summary['roc_auc'] < 0.8:
+        raise SystemExit('Model quality below expected threshold.')
+
+
+if __name__ == '__main__':
+    main()
+PY
+
+CMD ["python", "/app/train.py"]
